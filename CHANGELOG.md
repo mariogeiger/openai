@@ -21,6 +21,12 @@ and versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   called anything. Observed live: a model asked to speak before calling a tool
   sends the message at index 0 and the call at index 1.
 
+  Both halves of "the deltas at an index are the item at that index" now hold:
+  an announced message is filled with its own deltas, and text at an index
+  nothing announced becomes a message item there. A provider that streams deltas
+  and never repeats its `output` array is the ordinary case, so a caller reading
+  `items` finds the answer either way.
+
 ## [0.2.1] — 2026-08-29
 
 ### Fixed
