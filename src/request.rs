@@ -159,9 +159,16 @@ pub struct Request<'a> {
     /// otherwise identical, which is why streaming is a flag here rather than a
     /// second request type.
     pub stream: bool,
-    /// Whether OpenAI stores the response for later retrieval. With `false`,
-    /// reasoning items come back with `encrypted_content` so they can be
-    /// replayed — see
+    /// Whether OpenAI stores the response for later retrieval.
+    ///
+    /// Always sent, carrying OpenAI's documented behavior: responses are "saved
+    /// for 30 days by default", disabled "by setting `store` to `false`". So
+    /// `true` is the default this field states, and stating it is the point —
+    /// a caller who wants OpenAI to retain nothing writes
+    /// [`Self::without_storage`] and can read the `false` back off the request.
+    ///
+    /// With `false`, reasoning items come back with `encrypted_content` so they
+    /// can be replayed — see
     /// [`Context::push_reasoning`](crate::context::Context::push_reasoning).
     pub store: bool,
     /// Per-request instructions that will not be cached. For reusable ones, use
@@ -228,10 +235,23 @@ impl<'a> Request<'a> {
         self
     }
 
+    /// Return the whole response in one body rather than streaming it.
+    pub fn without_streaming(mut self) -> Self {
+        self.stream = false;
+        self
+    }
+
     /// Ask OpenAI not to store the response. Reasoning items then arrive with
     /// `encrypted_content`, so they can still be replayed.
     pub fn without_storage(mut self) -> Self {
         self.store = false;
+        self
+    }
+
+    /// Let OpenAI store the response for later retrieval, its documented
+    /// behavior.
+    pub fn with_storage(mut self) -> Self {
+        self.store = true;
         self
     }
 
@@ -250,7 +270,10 @@ impl<'a> Request<'a> {
 
 // ── Serialization ────────────────────────────────────────────────────────────
 // Hand-written so the emitted body is readable in one place. An `Option` here is
-// a genuine runtime absence, never a default elided to save bytes.
+// a genuine runtime absence, never a default elided to save bytes: a field the
+// API documents a default for is a plain field carrying that value, and it is
+// always emitted. An enclosing object whose every field is absent vanishes
+// entirely, because `{}` and no field are two different requests.
 
 #[derive(Serialize)]
 struct TextFormatWire<'a> {
@@ -270,15 +293,40 @@ struct TextWire<'a> {
     verbosity: Verbosity,
 }
 
+/// `reasoning`, whose four fields are independently present or absent.
+///
+/// The object is only ever built by [`ReasoningWire::of`], which returns `None`
+/// when all four are absent — an empty `"reasoning": {}` is a different request
+/// from no `reasoning` at all, and only one of them is what "the caller
+/// configured no reasoning" means.
 #[derive(Serialize)]
 struct ReasoningWire {
-    effort: ReasoningEffort,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    effort: Option<ReasoningEffort>,
     #[serde(skip_serializing_if = "Option::is_none")]
     mode: Option<crate::values::ReasoningMode>,
     #[serde(skip_serializing_if = "Option::is_none")]
     context: Option<crate::values::ReasoningContext>,
     #[serde(skip_serializing_if = "Option::is_none")]
     summary: Option<ReasoningSummary>,
+}
+
+impl ReasoningWire {
+    /// The `reasoning` object, or `None` when it would be empty.
+    fn of(
+        effort: Option<ReasoningEffort>,
+        mode: Option<crate::values::ReasoningMode>,
+        context: Option<crate::values::ReasoningContext>,
+        summary: Option<ReasoningSummary>,
+    ) -> Option<Self> {
+        let wire = Self { effort, mode, context, summary };
+        (!wire.is_empty()).then_some(wire)
+    }
+
+    /// Whether every field inside is absent.
+    fn is_empty(&self) -> bool {
+        self.effort.is_none() && self.mode.is_none() && self.context.is_none() && self.summary.is_none()
+    }
 }
 
 #[derive(Serialize)]
@@ -309,7 +357,8 @@ struct RequestWire<'a> {
     input: &'a [InputItem],
     parallel_tool_calls: bool,
     text: TextWire<'a>,
-    reasoning: ReasoningWire,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    reasoning: Option<ReasoningWire>,
     tool_choice: &'a ToolChoice,
     #[serde(skip_serializing_if = "Option::is_none")]
     prompt_cache_options: Option<CacheOptionsWire>,
@@ -337,7 +386,10 @@ impl Serialize for Request<'_> {
             Model::Gpt5_6(m) => (Some(CacheOptionsWire { mode: m.caching.mode, ttl: m.caching.ttl }), None),
             Model::Gpt5_5(m) => (None, Some(retention_of(m.retention))),
             Model::Gpt5_5Pro(m) => (None, Some(retention_of(m.retention))),
-            Model::Gpt5_4(m) => (None, Some(m.retention)),
+            // The one model that accepts both values, and the one whose default
+            // is the organization's data-retention policy rather than a value
+            // OpenAI names. So `None` here stays absent.
+            Model::Gpt5_4(m) => (None, m.retention),
         };
         fn retention_of(r: ExtendedRetentionOnly) -> crate::values::CacheRetention {
             match r {
@@ -346,8 +398,10 @@ impl Serialize for Request<'_> {
         }
 
         // `mode` and `context` exist only on GPT-5.6; earlier models 400 on them.
+        // `context` carries its documented default and is always sent there;
+        // `mode` has no documented default and is sent only when chosen.
         let (mode, context) = match &prefix.model {
-            Model::Gpt5_6(m) => (Some(m.mode), Some(m.reasoning_context)),
+            Model::Gpt5_6(m) => (m.mode, Some(m.reasoning_context)),
             Model::Gpt5_5(_) | Model::Gpt5_5Pro(_) | Model::Gpt5_4(_) => (None, None),
         };
 
@@ -366,7 +420,7 @@ impl Serialize for Request<'_> {
             input: self.context.items(),
             parallel_tool_calls: prefix.parallel_tool_calls,
             text: TextWire { format, verbosity: prefix.verbosity },
-            reasoning: ReasoningWire { effort: prefix.effort(), mode, context, summary: prefix.reasoning_summary },
+            reasoning: ReasoningWire::of(prefix.effort(), mode, context, prefix.reasoning_summary),
             tool_choice: &self.tool_choice,
             prompt_cache_options,
             prompt_cache_retention,
@@ -387,7 +441,7 @@ mod tests {
     use super::*;
     use crate::content::ContentBlock;
     use crate::context::{BreakpointSlot, Context};
-    use crate::model::{EffortNoneToMax, Gpt5_6Tier};
+    use crate::model::{EffortMediumToXhigh, EffortNoneToMax, EffortNoneToXhigh, Gpt5_6Tier};
     use crate::tools::AllowedToolsMode;
     use crate::values::{CacheRetention, ReasoningContext, ReasoningMode};
     use serde_json::json;
@@ -403,8 +457,18 @@ mod tests {
         serde_json::to_value(Request::new(context, prefix).unwrap()).unwrap()
     }
 
-    /// The whole body, exactly, for the commonest request. If any default drifts
-    /// this test says which one.
+    /// The whole body, exactly, for the commonest request — every field OpenAI
+    /// documents a default for, carrying that default, and nothing else.
+    ///
+    /// This is the test the design rests on. Each field below is here because
+    /// the reference names a default for it: `store` "saved for 30 days by
+    /// default", `parallel_tool_calls` typed non-null on the response,
+    /// `text.format` "the default format is `{\"type\": \"text\"}`",
+    /// `text.verbosity` "the default is `medium`", `reasoning.context` "if
+    /// omitted or set to `auto`, the model determines", `prompt_cache_options`
+    /// "defaults to `implicit`" / "defaults to `30m`". Nothing else appears,
+    /// because nothing else has one — and if a field drifts into or out of this
+    /// literal, this test names it.
     #[test]
     fn a_default_gpt_5_6_body_is_exactly_this() {
         let mut context = Context::new(vec![]);
@@ -416,13 +480,111 @@ mod tests {
                 "input": [{"type": "message", "role": "user", "content": [{"type": "input_text", "text": "hello"}]}],
                 "parallel_tool_calls": true,
                 "text": {"format": {"type": "text"}, "verbosity": "medium"},
-                "reasoning": {"effort": "medium", "mode": "standard", "context": "all_turns"},
+                "reasoning": {"context": "auto"},
                 "tool_choice": "auto",
                 "prompt_cache_options": {"mode": "implicit", "ttl": "30m"},
                 "stream": false,
                 "store": true,
             })
         );
+    }
+
+    /// The minimal body: a model that documents a default for nothing but its
+    /// caching field, asked for nothing. Every optional field is absent, and
+    /// `reasoning` is absent *as an object* rather than present and empty.
+    ///
+    /// GPT-5.4 is the sharpest case because its `prompt_cache_retention`
+    /// default "depends on your organization's data retention policy" — a
+    /// default the crate cannot know, so the only honest rendering is silence.
+    #[test]
+    fn a_request_asking_for_nothing_sends_only_what_has_a_documented_default() {
+        let mut context = Context::new(vec![]);
+        context.push_user_text("hello");
+        assert_eq!(
+            body(&context, PrefixSettings::new(Model::gpt_5_4())),
+            json!({
+                "model": "gpt-5.4",
+                "input": [{"type": "message", "role": "user", "content": [{"type": "input_text", "text": "hello"}]}],
+                "parallel_tool_calls": true,
+                "text": {"format": {"type": "text"}, "verbosity": "medium"},
+                "tool_choice": "auto",
+                "stream": false,
+                "store": true,
+            })
+        );
+    }
+
+    /// `reasoning` vanishes rather than arriving empty. An empty object is a
+    /// field the caller never asked for, and the two are not the same request.
+    #[test]
+    fn an_empty_reasoning_object_is_no_reasoning_object() {
+        let context = Context::new(vec![]);
+        let bare = body(&context, PrefixSettings::new(Model::gpt_5_5()));
+        assert!(bare.get("reasoning").is_none(), "{bare}");
+        assert!(!serde_json::to_string(&bare).unwrap().contains("reasoning"), "{bare}");
+
+        // One field inside is enough to bring the object back, and it then holds
+        // exactly that field.
+        let asked = body(&context, PrefixSettings::new(Model::gpt_5_5().with_effort(EffortNoneToXhigh::High)));
+        assert_eq!(asked["reasoning"], json!({"effort": "high"}));
+
+        let summarized =
+            body(&context, PrefixSettings::new(Model::gpt_5_5()).with_reasoning_summary(ReasoningSummary::Concise));
+        assert_eq!(summarized["reasoning"], json!({"summary": "concise"}));
+    }
+
+    /// The caller decides how hard the model thinks, including deciding not to.
+    #[test]
+    fn effort_is_sent_only_when_chosen() {
+        let context = Context::new(vec![]);
+        for model in [Model::gpt_5_6_sol(), Model::gpt_5_6_terra(), Model::gpt_5_6_luna()] {
+            assert!(body(&context, PrefixSettings::new(model))["reasoning"].get("effort").is_none());
+        }
+        assert!(body(&context, PrefixSettings::new(Model::gpt_5_5())).get("reasoning").is_none());
+        assert!(body(&context, PrefixSettings::new(Model::gpt_5_5_pro())).get("reasoning").is_none());
+        assert!(body(&context, PrefixSettings::new(Model::gpt_5_4())).get("reasoning").is_none());
+
+        let chosen = PrefixSettings::new(Model::gpt_5_6_sol().with_effort(EffortNoneToMax::Max));
+        assert_eq!(chosen.effort(), Some(crate::values::ReasoningEffort::Max));
+        assert_eq!(body(&context, chosen)["reasoning"]["effort"], "max");
+
+        // And a chosen effort can be taken back off again.
+        let withdrawn = PrefixSettings::new(Model::gpt_5_6_sol().with_effort(EffortNoneToMax::Max).without_effort());
+        assert_eq!(withdrawn.effort(), None);
+        assert!(body(&context, withdrawn)["reasoning"].get("effort").is_none());
+    }
+
+    /// `store` proves the other half of the rule: OpenAI documents that a
+    /// response is retained unless told otherwise, so the field is always on the
+    /// wire — and a caller who wants nothing retained says so and can read it
+    /// back.
+    #[test]
+    fn store_is_always_sent_and_always_the_caller_s() {
+        let context = Context::new(vec![]);
+        assert_eq!(body(&context, PrefixSettings::new(Model::gpt_5_6_sol()))["store"], true);
+
+        let stateless = Request::new(&context, PrefixSettings::new(Model::gpt_5_6_sol())).unwrap().without_storage();
+        assert!(!stateless.store);
+        assert_eq!(serde_json::to_value(&stateless).unwrap()["store"], false);
+        assert_eq!(serde_json::to_value(stateless.with_storage()).unwrap()["store"], true);
+    }
+
+    /// Each model's documented effort is readable without being imposed: the
+    /// request says nothing, and the fact says `medium`.
+    #[test]
+    fn the_model_s_own_default_effort_is_a_readable_fact() {
+        use crate::model::ModelId;
+        use crate::values::ReasoningEffort;
+        assert_eq!(ModelId::Gpt5_6Sol.default_effort(), ReasoningEffort::Medium);
+        assert_eq!(ModelId::Gpt5_6Terra.default_effort(), ReasoningEffort::Medium);
+        assert_eq!(ModelId::Gpt5_6Luna.default_effort(), ReasoningEffort::Medium);
+        assert_eq!(ModelId::Gpt5_5.default_effort(), ReasoningEffort::Medium);
+        assert_eq!(ModelId::Gpt5_5Pro.default_effort(), ReasoningEffort::High);
+        assert_eq!(ModelId::Gpt5_4.default_effort(), ReasoningEffort::None);
+
+        // Stated, never imposed: the body still carries no effort.
+        let context = Context::new(vec![]);
+        assert!(body(&context, PrefixSettings::new(Model::gpt_5_5_pro())).get("reasoning").is_none());
     }
 
     /// An empty tool array is omitted, not sent as `[]`: absent and empty render
@@ -476,18 +638,33 @@ mod tests {
         let in_memory = body(&context, PrefixSettings::new(Model::gpt_5_4().with_retention(CacheRetention::InMemory)));
         assert_eq!(in_memory["prompt_cache_retention"], "in_memory");
         assert!(in_memory.get("prompt_cache_options").is_none());
+
+        // GPT-5.4 alone documents no value as its default — the organization's
+        // data-retention policy decides — so unasked, the field is absent, and
+        // asking can be taken back.
+        let unasked = body(&context, PrefixSettings::new(Model::gpt_5_4()));
+        assert!(unasked.get("prompt_cache_retention").is_none(), "{unasked}");
+        let withdrawn =
+            PrefixSettings::new(Model::gpt_5_4().with_retention(CacheRetention::InMemory).without_retention());
+        assert!(body(&context, withdrawn).get("prompt_cache_retention").is_none());
     }
 
     /// `reasoning.mode` and `reasoning.context` are GPT-5.6-only; sending them
-    /// to GPT-5.5 is a 400.
+    /// to GPT-5.5 is a 400. `context` carries its documented `auto` default;
+    /// `mode` has none, so it appears only when chosen.
     #[test]
     fn gpt_5_6_only_reasoning_fields_stay_on_gpt_5_6() {
         let context = Context::new(vec![]);
         let six = body(&context, PrefixSettings::new(Model::gpt_5_6_sol()));
-        assert_eq!(six["reasoning"]["mode"], "standard");
-        assert_eq!(six["reasoning"]["context"], "all_turns");
+        assert_eq!(six["reasoning"]["context"], "auto");
+        assert!(six["reasoning"].get("mode").is_none());
 
-        let five = body(&context, PrefixSettings::new(Model::gpt_5_5()));
+        let chosen = body(&context, PrefixSettings::new(Model::gpt_5_6_sol().with_mode(ReasoningMode::Standard)));
+        assert_eq!(chosen["reasoning"]["mode"], "standard");
+
+        // On GPT-5.5 neither field can appear, chosen or not: the type carries
+        // no `mode` and no `reasoning_context` at all.
+        let five = body(&context, PrefixSettings::new(Model::gpt_5_5().with_effort(EffortNoneToXhigh::Medium)));
         assert!(five["reasoning"].get("mode").is_none());
         assert!(five["reasoning"].get("context").is_none());
         assert_eq!(five["reasoning"]["effort"], "medium");
@@ -502,16 +679,21 @@ mod tests {
             .with_reasoning_context(ReasoningContext::CurrentTurn);
         let v = body(&context, PrefixSettings::new(model));
         assert_eq!(v["reasoning"], json!({"effort": "max", "mode": "pro", "context": "current_turn"}));
+        // Every one of the three is there because the caller asked for it.
     }
 
-    /// Each model's documented default effort, on the wire.
+    /// Each model's own effort range still reaches the wire when chosen.
     #[test]
-    fn default_effort_is_the_model_s_own() {
+    fn a_chosen_effort_reaches_the_wire_on_every_model() {
         let context = Context::new(vec![]);
-        assert_eq!(body(&context, PrefixSettings::new(Model::gpt_5_6_sol()))["reasoning"]["effort"], "medium");
-        assert_eq!(body(&context, PrefixSettings::new(Model::gpt_5_5()))["reasoning"]["effort"], "medium");
-        assert_eq!(body(&context, PrefixSettings::new(Model::gpt_5_5_pro()))["reasoning"]["effort"], "high");
-        assert_eq!(body(&context, PrefixSettings::new(Model::gpt_5_4()))["reasoning"]["effort"], "none");
+        let six = PrefixSettings::new(Model::gpt_5_6_sol().with_effort(EffortNoneToMax::Medium));
+        assert_eq!(body(&context, six)["reasoning"]["effort"], "medium");
+        let five = PrefixSettings::new(Model::gpt_5_5().with_effort(EffortNoneToXhigh::Medium));
+        assert_eq!(body(&context, five)["reasoning"]["effort"], "medium");
+        let pro = PrefixSettings::new(Model::gpt_5_5_pro().with_effort(EffortMediumToXhigh::High));
+        assert_eq!(body(&context, pro)["reasoning"]["effort"], "high");
+        let four = PrefixSettings::new(Model::gpt_5_4().with_effort(EffortNoneToXhigh::None));
+        assert_eq!(body(&context, four)["reasoning"]["effort"], "none");
     }
 
     #[test]
