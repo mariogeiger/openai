@@ -789,11 +789,14 @@ mod tests {
         assert_eq!(snapshot.incomplete_reason, None);
     }
 
-    /// A `null` usage is absent. A usage object that will not deserialize is an
-    /// error, because quietly reporting no cost would hide the one number this
-    /// crate exists to measure.
+    /// A `null` or absent usage is absent, and a usage object reporting only the
+    /// totals is those totals: an omitted breakdown is zero of that kind, which
+    /// is what a gateway that reports less than OpenAI does actually means. What
+    /// remains an error is an object whose counts contradict the schema, because
+    /// quietly reporting no cost would hide the one number this crate exists to
+    /// measure.
     #[test]
-    fn usage_is_absent_or_whole() {
+    fn usage_is_absent_or_as_much_of_it_as_was_reported() {
         let null = StreamEvent::from_json(&json!({"type": "response.completed", "response": {"usage": null}}));
         let StreamEvent::Completed(snapshot) = null.unwrap() else { panic!("expected completion") };
         assert_eq!(snapshot.usage, None);
@@ -802,10 +805,19 @@ mod tests {
         let StreamEvent::Completed(snapshot) = missing.unwrap() else { panic!("expected completion") };
         assert_eq!(snapshot.usage, None);
 
-        let partial = StreamEvent::from_json(&json!({
+        let totals_only = StreamEvent::from_json(&json!({
             "type": "response.completed", "response": {"usage": {"input_tokens": 5, "output_tokens": 2}}
         }));
-        assert!(matches!(partial, Err(FrameError::UndecodableUsage(_))));
+        let StreamEvent::Completed(snapshot) = totals_only.unwrap() else { panic!("expected completion") };
+        let usage = snapshot.usage.expect("two totals are two real numbers");
+        assert_eq!(usage.input_tokens, 5);
+        assert_eq!(usage.output_tokens, 2);
+        assert_eq!(usage.input_tokens_details.cached_tokens, 0);
+
+        let corrupt = StreamEvent::from_json(&json!({
+            "type": "response.completed", "response": {"usage": {"input_tokens": "five"}}
+        }));
+        assert!(matches!(corrupt, Err(FrameError::UndecodableUsage(_))));
     }
 
     #[test]
