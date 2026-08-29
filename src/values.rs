@@ -66,10 +66,14 @@ api_enum! {
     }
 }
 
-api_enum! {
+api_enum! { roundtrip
     /// Whether an assistant message was intermediate commentary or the final
     /// answer. OpenAI asks that the value be preserved and resent on every
     /// replayed assistant message; dropping it degrades tool-heavy flows.
+    ///
+    /// Round-trips, because it travels in both directions: it is sent on a
+    /// replayed assistant message and read back off a streamed `message`
+    /// output item.
     AssistantPhase {
         /// An interim update, such as a preamble before a tool call.
         Commentary => "commentary",

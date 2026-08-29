@@ -1,11 +1,11 @@
 [package]
 name = "openai"
-version = "0.1.0"
+version = "0.2.0"
 edition = "2024"
 license = "MIT"
-description = "Strictly typed bindings for the OpenAI Responses API, built so that an uncacheable or API-refused request cannot be constructed."
+description = "Strictly typed bindings for the OpenAI Responses API, built so that an uncacheable or API-refused request cannot be constructed, nor an unfinished stream read as a finished response."
 repository = "https://github.com/mariogeiger/openai"
-keywords = ["openai", "responses", "prompt-caching", "bindings"]
+keywords = ["openai", "responses", "prompt-caching", "streaming", "bindings"]
 categories = ["api-bindings"]
 
 [dependencies]
