@@ -5,6 +5,22 @@ All notable changes to this crate are documented here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.2.2] — 2026-08-29
+
+### Fixed
+
+- A streamed message item now carries the text its own deltas built. An item is
+  announced with empty content and filled by `response.output_text.delta`, so
+  the deltas keyed to an item's `output_index` *are* that item's text — the key
+  already knew the index, and `settle` now uses it.
+
+  Before this, prose said beside a function call settled as an empty message
+  item. `Settled::text` had the words, but a caller reading `items` — which is
+  how a caller keeps the answer in document order, one text part and one call at
+  a time — saw an empty message and lost the sentence the model said before it
+  called anything. Observed live: a model asked to speak before calling a tool
+  sends the message at index 0 and the call at index 1.
+
 ## [0.2.1] — 2026-08-29
 
 ### Fixed

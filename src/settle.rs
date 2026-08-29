@@ -30,7 +30,7 @@ use std::collections::BTreeMap;
 
 use crate::stream::{
     CalledFunction, FrameError, OutputItem, PartKey, PartKind, ReasoningItem, ResponseError, ResponseSnapshot,
-    StreamEvent, joined,
+    StreamEvent, joined, joined_at,
 };
 use crate::usage::Usage;
 use crate::values::IncompleteReason;
@@ -224,10 +224,25 @@ impl Settling {
         let terminal = self.terminal.ok_or(SettleError::Truncated { events: self.events, text_len: text.len() })?;
         let reasoning_summary = joined(&self.text_parts, PartKind::ReasoningSummary);
 
+        // A message item is announced empty and its text arrives as deltas, so
+        // the deltas at that item's index *are* its text. Filling it here is
+        // what keeps `items` a faithful record of the answer in document order:
+        // without it a message announced beside a function call reads as empty,
+        // and a caller iterating items alone loses the prose the model said
+        // before it called anything.
+        let mut streamed = self.items;
+        for (output_index, item) in &mut streamed {
+            if let OutputItem::Message { text, .. } = item
+                && text.is_empty()
+            {
+                *text = joined_at(&self.text_parts, PartKind::OutputText, *output_index);
+            }
+        }
+
         // A terminal snapshot's own `output` array is authoritative when it has
         // one: it is the server's final word. Streamed items fill in when the
         // snapshot omits it, which is the ordinary case.
-        let mut items: Vec<OutputItem> = self.items.into_values().collect();
+        let mut items: Vec<OutputItem> = streamed.into_values().collect();
         let (outcome, usage, id) = match terminal {
             Terminal::Completed(snapshot) => (Outcome::Completed, snapshot.usage, take_output(snapshot, &mut items)),
             Terminal::Incomplete(snapshot) => {
@@ -727,5 +742,33 @@ mod tests {
         let settled = settling.settle().unwrap();
         assert_eq!(settled.items.len(), 1);
         assert_eq!(settled.function_calls().next().unwrap().arguments.decode().unwrap(), json!({"final": true}));
+    }
+    /// A message item is announced empty and filled by deltas, so the deltas at
+    /// its index are its text. Without that, prose said beside a function call
+    /// reads as an empty message and a caller iterating items loses it.
+    #[test]
+    fn a_streamed_message_item_carries_the_text_of_its_own_deltas() {
+        let mut settling = Settling::new();
+        for frame in [
+            r#"{"type":"response.output_item.added","output_index":0,
+                "item":{"id":"msg_1","type":"message","role":"assistant","content":[]}}"#,
+            r#"{"type":"response.output_text.delta","output_index":0,"content_index":0,"delta":"I will read it."}"#,
+            r#"{"type":"response.output_item.added","output_index":1,
+                "item":{"type":"function_call","call_id":"c1","name":"read","arguments":""}}"#,
+            r#"{"type":"response.output_item.done","output_index":1,
+                "item":{"type":"function_call","call_id":"c1","name":"read","arguments":"{\"path\":\"a\"}"}}"#,
+            r#"{"type":"response.completed","response":{"id":"resp_1"}}"#,
+        ] {
+            settling.consume_payload(frame).unwrap();
+        }
+        let settled = settling.settle().unwrap();
+
+        assert_eq!(settled.text, "I will read it.");
+        assert_eq!(settled.items.len(), 2);
+        let OutputItem::Message { text, .. } = &settled.items[0] else {
+            panic!("the first item is the message");
+        };
+        assert_eq!(text, "I will read it.", "the item carries the text its own deltas built");
+        assert_eq!(settled.function_calls().count(), 1);
     }
 }
