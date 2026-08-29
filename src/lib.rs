@@ -67,15 +67,59 @@
 //! # Ok::<(), Box<dyn std::error::Error>>(())
 //! ```
 //!
+//! # Reading the answer back
+//!
+//! A request is half the API. The other half is the stream of Server-Sent
+//! Events a `stream: true` response returns, and it is decoded here too:
+//! [`StreamEvent`](stream::StreamEvent) is one frame, and
+//! [`Settling`](settle::Settling) accumulates a sequence of them.
+//!
+//! Two rules shape those types, both learned from what breaks in production:
+//!
+//! * **A new event type is not an error.** OpenAI's compatibility promise names
+//!   "adding new event types in streaming APIs" as backwards-compatible, so a
+//!   decoder that errors on an unrecognized event is one a routine server-side
+//!   release will break. Hence [`StreamEvent::Unmodeled`](stream::StreamEvent::Unmodeled):
+//!   the unknown case is a variant you ignore, never a failure.
+//! * **An unfinished stream is a different type from a finished one.** A
+//!   dropped connection leaves text that looks exactly like a complete answer.
+//!   So [`Settling`](settle::Settling) has no method returning a response, and
+//!   [`Settled`](settle::Settled) is reachable only through
+//!   [`Settling::settle`](settle::Settling::settle), which fails on a stream
+//!   that never sent a terminal event.
+//!
+//! ```
+//! use openai::settle::{Outcome, Settling};
+//!
+//! let mut settling = Settling::new();
+//! for frame in [
+//!     r#"{"type":"response.output_text.delta","output_index":0,"content_index":0,"delta":"Hi"}"#,
+//!     r#"{"type":"response.some_event_added_next_year","output_index":0}"#,
+//!     r#"{"type":"response.completed","response":{"id":"resp_1"}}"#,
+//! ] {
+//!     settling.consume_payload(frame)?;
+//! }
+//! let settled = settling.settle()?;
+//! assert_eq!(settled.outcome, Outcome::Completed);
+//! assert_eq!(settled.text, "Hi");
+//! # Ok::<(), Box<dyn std::error::Error>>(())
+//! ```
+//!
 //! # Deliberately out of scope
 //!
-//! No HTTP client, no async runtime, no streaming decoder, no response
-//! deserializer beyond [`Usage`](usage::Usage) — the cache accounting is the
-//! crate's reason to exist, so it is the one response shape modeled. Chat
-//! Completions is not modeled at all. Stateful continuation
-//! (`previous_response_id`, `conversation`) is excluded on purpose: only the
-//! stateless path, where the caller supplies every input item, lets the caller
-//! control the rendered prefix byte for byte.
+//! No HTTP client, no async runtime, and no SSE transport: the caller owns the
+//! socket and hands this crate one `data:` payload at a time. Of the response
+//! body only [`Usage`](usage::Usage) and the streamed shapes are deserialized,
+//! since cache accounting is the crate's reason to exist. Chat Completions is
+//! not modeled at all. Stateful continuation (`previous_response_id`,
+//! `conversation`) is excluded on purpose: only the stateless path, where the
+//! caller supplies every input item, lets the caller control the rendered
+//! prefix byte for byte.
+//!
+//! Of the streaming events, the seven a text-and-tools consumer needs are
+//! modeled and the rest read as
+//! [`Unmodeled`](stream::StreamEvent::Unmodeled) — see the crate's
+//! `CHANGELOG.md` for the full list and the reason for each omission.
 
 #![deny(missing_docs)]
 
@@ -84,6 +128,8 @@ pub mod context;
 pub mod model;
 pub mod prefix;
 pub mod request;
+pub mod settle;
+pub mod stream;
 pub mod tools;
 pub mod usage;
 pub mod values;

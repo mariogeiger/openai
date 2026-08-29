@@ -2,7 +2,8 @@
 
 Rust bindings for the [OpenAI Responses API](https://developers.openai.com/api/reference/resources/responses/methods/create) — strictly typed, cache-safe, bindings-only.
 
-Bring your own HTTP client. This crate hands you a validated `Serialize` body; you POST it.
+Bring your own HTTP client. This crate hands you a validated `Serialize` body; you
+POST it, then feed the streamed frames back in to get a typed response.
 
 ## Mission
 
@@ -82,6 +83,11 @@ reqwest::Client::new()
 | Moving a breakpoint anchored on stable instructions | anchored slots return `SlotIsAnchored` |
 | A breakpoint on top-level `instructions` | the field is `UncacheableInstructions`, and breakpoints attach only to content blocks |
 | An out-of-range temperature or `max_output_tokens` | validating constructors returning named errors |
+| Reading a half-finished stream as a finished response | `Settling` has no method returning one, and `Settled` comes only from `settle()` |
+| Fabricating a `Settled` to bypass that | the struct is `#[non_exhaustive]`, so the literal will not compile outside the crate |
+| A new server-side event type breaking the decoder | unknown types decode as `StreamEvent::Unmodeled`, never an error |
+| Mistaking malformed function arguments for no arguments | `FunctionArguments::decode` returns `Err`; empty arguments return `{}` |
+| Re-serializing function arguments and losing the prefix | `FunctionArguments` keeps the model's bytes; decoding is a separate step |
 
 ## Modeled
 
@@ -90,13 +96,68 @@ reqwest::Client::new()
 cutoff, minimum cacheable prefix, and exact per-token pricing including the
 cache read and write rates.
 
+## Reading the stream back
+
+A request is half the API; the streamed answer is the other half. `stream`
+decodes one Server-Sent Event payload into a `StreamEvent`, and `settle`
+accumulates a sequence of them.
+
+```rust
+use openai::settle::{Outcome, Settling};
+use openai::stream::data_payload;
+
+let mut settling = Settling::new();
+for line in sse_body.lines() {
+    if let Some(payload) = data_payload(line) {
+        settling.consume_payload(payload)?;   // decode and fold in
+        print!("{}", settling.text_so_far()); // readable while in flight
+    }
+}
+
+// The only way to obtain a finished response, and it fails on a stream that
+// never sent a terminal event.
+let settled = settling.settle()?;
+match &settled.outcome {
+    Outcome::Completed => println!("{}", settled.text),
+    Outcome::Incomplete { reason } => println!("cut short: {reason:?}"),
+    Outcome::Failed { error } | Outcome::Errored { error } => println!("{}", error.message),
+}
+for call in settled.function_calls() {
+    let arguments = call.arguments.decode()?; // the JSON string, decoded here
+    println!("{} {arguments}", call.name);
+}
+```
+
+Two decisions carry the weight.
+
+**An unknown event is a variant, never an error.** OpenAI's compatibility
+promise lists "adding new event types in streaming APIs" as backwards
+compatible, so a decoder that errors on an unrecognized event is one a routine
+server-side release will break. `StreamEvent::Unmodeled` is that case, and it is
+also how documented-but-uncovered events read — "well formed, nothing to do" is
+one situation, not two.
+
+**An unfinished stream has a different type from a finished one.** A dropped
+connection leaves text that looks exactly like a complete answer. `Settling`
+therefore has no method that returns a response, and `Settled` is reachable only
+through `Settling::settle`, which returns `SettleError::Truncated` when no
+terminal event ever arrived.
+
+Covered events: `response.output_text.delta`,
+`response.reasoning_summary_text.delta`, `response.output_item.added`,
+`response.output_item.done`, `response.completed`, `response.failed`,
+`response.incomplete`, and the bare `error` event. The other 50 documented
+`response.*` events decode as `Unmodeled`; `CHANGELOG.md` says why for each
+group.
+
 ## Not modeled
 
-No HTTP client, no async runtime, no streaming decoder. No response
-deserializer beyond `usage`, which exists because the cache accounting is the
-crate's reason to be. No Chat Completions. No built-in or MCP tools — function
-tools only. No stateful continuation (`previous_response_id`, `conversation`):
-only the stateless path lets the caller control the prefix byte for byte.
+No HTTP client, no async runtime, no SSE transport — you own the socket and hand
+this crate one `data:` payload at a time. Of the response body, only `usage` and
+the streamed shapes are deserialized. No Chat Completions. No built-in or MCP
+tools — function tools only. No stateful continuation (`previous_response_id`,
+`conversation`): only the stateless path lets the caller control the prefix byte
+for byte.
 
 ## Install
 
