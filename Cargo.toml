@@ -1,6 +1,6 @@
 [package]
 name = "openai"
-version = "0.2.1"
+version = "0.2.2"
 edition = "2024"
 license = "MIT"
 description = "Strictly typed bindings for the OpenAI Responses API, built so that an uncacheable or API-refused request cannot be constructed, nor an unfinished stream read as a finished response."

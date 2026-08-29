@@ -523,6 +523,24 @@ pub(crate) enum PartKind {
     ReasoningSummary,
 }
 
+/// The parts of one kind belonging to one output item, in document order.
+///
+/// The index is part of a part's identity, so this is a filter rather than a
+/// second bookkeeping scheme: one item's text is exactly the parts keyed to it.
+pub(crate) fn joined_at(parts: &BTreeMap<PartKey, String>, kind: PartKind, output_index: u32) -> String {
+    let of_item = || {
+        parts
+            .iter()
+            .filter(move |(key, _)| key.kind == kind && key.output_index == output_index)
+            .map(|(_, text)| text.as_str())
+    };
+    let mut joined = String::with_capacity(of_item().map(str::len).sum());
+    for piece in of_item() {
+        joined.push_str(piece);
+    }
+    joined
+}
+
 /// Concatenates the parts of one kind, in document order, with one allocation.
 pub(crate) fn joined(parts: &BTreeMap<PartKey, String>, kind: PartKind) -> String {
     let of_kind = || parts.iter().filter(move |(key, _)| key.kind == kind).map(|(_, text)| text.as_str());
