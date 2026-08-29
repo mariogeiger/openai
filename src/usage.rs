@@ -18,7 +18,7 @@ use crate::model::Pricing;
 ///
 /// The two reported counts do not overlap, and together they do not have to
 /// exhaust `input_tokens`: what is left over is ordinary uncached input.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Deserialize)]
 pub struct InputTokensDetails {
     /// Tokens served from the cache, billed at the cached rate.
     ///
@@ -33,7 +33,7 @@ pub struct InputTokensDetails {
 }
 
 /// The breakdown of output tokens.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Deserialize)]
 pub struct OutputTokensDetails {
     /// Tokens spent reasoning. Invisible in the answer, billed as output, and
     /// counted against `max_output_tokens`.
@@ -42,7 +42,14 @@ pub struct OutputTokensDetails {
 }
 
 /// What one response cost, in tokens.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
+///
+/// Every field defaults to zero, and a whole breakdown object may be absent as
+/// well as a count inside one. An absent counter means "nothing of that kind",
+/// never "unknown": a gateway that reports only the two totals still reports
+/// two real numbers, and refusing the object over an omitted breakdown would
+/// turn a thin cost report into a broken response.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Deserialize)]
+#[serde(default)]
 pub struct Usage {
     /// Every input token, cached and uncached alike.
     pub input_tokens: u32,
@@ -136,6 +143,19 @@ mod tests {
                 + usage.input_tokens_details.cache_write_tokens,
             usage.input_tokens
         );
+    }
+
+    /// A whole breakdown object may be absent, not only a count inside one. A
+    /// gateway reporting the two totals alone reports two real numbers, and the
+    /// counts it omitted are zero of that kind rather than an unusable object.
+    #[test]
+    fn an_absent_breakdown_reads_as_zero_of_that_kind() {
+        let usage: Usage = serde_json::from_str(r#"{"input_tokens": 100, "output_tokens": 10}"#).unwrap();
+        assert_eq!(usage.input_tokens, 100);
+        assert_eq!(usage.output_tokens, 10);
+        assert_eq!(usage.input_tokens_details.cached_tokens, 0);
+        assert_eq!(usage.output_tokens_details.reasoning_tokens, 0);
+        assert_eq!(usage.total_tokens, 0, "unreported, and zero is what it says");
     }
 
     /// A missing detail field means zero, so an older response body still parses

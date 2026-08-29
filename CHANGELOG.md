@@ -5,6 +5,23 @@ All notable changes to this crate are documented here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.2.1] — 2026-08-29
+
+### Fixed
+
+- A streamed `usage` object reporting only `input_tokens` and `output_tokens`
+  now decodes, instead of failing the frame that carried it. `Usage` and both
+  breakdown structs are `#[serde(default)]`, so an omitted `input_tokens_details`
+  or `output_tokens_details` reads as zero of that kind — the same rule that
+  already applied to a count *inside* a breakdown, now applied to the breakdown
+  itself.
+
+  A gateway in front of OpenAI reports fewer fields than OpenAI does, and
+  refusing the object turned a thin cost report into a broken response: the whole
+  turn failed over an omitted cache count. Zero is the honest reading of an
+  absent counter, and an object whose counts contradict the schema is still
+  `FrameError::UndecodableUsage`.
+
 ## [0.2.0] — 2026-08-29
 
 The other half of the API: a streamed response is now decoded, not hand-matched
