@@ -1,0 +1,13 @@
+[package]
+name = "openai"
+version = "0.1.0"
+edition = "2024"
+license = "MIT"
+description = "Strictly typed bindings for the OpenAI Responses API, built so that an uncacheable or API-refused request cannot be constructed."
+repository = "https://github.com/mariogeiger/openai"
+keywords = ["openai", "responses", "prompt-caching", "bindings"]
+categories = ["api-bindings"]
+
+[dependencies]
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
