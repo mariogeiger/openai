@@ -27,6 +27,7 @@
 //! order.
 
 use std::collections::BTreeMap;
+use std::collections::btree_map::Entry;
 
 use crate::stream::{
     CalledFunction, FrameError, OutputItem, PartKey, PartKind, ReasoningItem, ResponseError, ResponseSnapshot,
@@ -225,17 +226,31 @@ impl Settling {
         let reasoning_summary = joined(&self.text_parts, PartKind::ReasoningSummary);
 
         // A message item is announced empty and its text arrives as deltas, so
-        // the deltas at that item's index *are* its text. Filling it here is
-        // what keeps `items` a faithful record of the answer in document order:
-        // without it a message announced beside a function call reads as empty,
-        // and a caller iterating items alone loses the prose the model said
-        // before it called anything.
+        // the deltas at an index *are* the item at that index. Both halves of
+        // that follow: an announced message is filled with its own deltas, and
+        // text at an index nothing announced still describes a message there.
+        //
+        // Without this, `items` is not a faithful record of the answer. Prose
+        // said beside a function call reads as an empty message, and a caller
+        // iterating items to keep text and calls in document order loses the
+        // sentence the model said before it called anything.
         let mut streamed = self.items;
-        for (output_index, item) in &mut streamed {
-            if let OutputItem::Message { text, .. } = item
-                && text.is_empty()
-            {
-                *text = joined_at(&self.text_parts, PartKind::OutputText, *output_index);
+        for output_index in text_indices(&self.text_parts) {
+            match streamed.entry(output_index) {
+                Entry::Occupied(mut held) => {
+                    if let OutputItem::Message { text, .. } = held.get_mut()
+                        && text.is_empty()
+                    {
+                        *text = joined_at(&self.text_parts, PartKind::OutputText, output_index);
+                    }
+                }
+                Entry::Vacant(empty) => {
+                    empty.insert(OutputItem::Message {
+                        id: None,
+                        phase: None,
+                        text: joined_at(&self.text_parts, PartKind::OutputText, output_index),
+                    });
+                }
             }
         }
 
@@ -264,6 +279,14 @@ impl Settling {
 
         Ok(Settled { outcome, id, text, reasoning_summary, items, usage, events: self.events })
     }
+}
+
+/// The output indices answer text arrived at, in order and without repeats.
+fn text_indices(parts: &BTreeMap<PartKey, String>) -> Vec<u32> {
+    let mut indices: Vec<u32> =
+        parts.keys().filter(|key| key.kind == PartKind::OutputText).map(|key| key.output_index).collect();
+    indices.dedup();
+    indices
 }
 
 /// Moves a snapshot's `output` into `items` when it has one, and yields the
@@ -769,6 +792,30 @@ mod tests {
             panic!("the first item is the message");
         };
         assert_eq!(text, "I will read it.", "the item carries the text its own deltas built");
+        assert_eq!(settled.function_calls().count(), 1);
+    }
+
+    /// Text at an index nothing announced still describes a message there. A
+    /// provider that streams deltas and never repeats its `output` array is the
+    /// ordinary case, and a caller reading `items` must still find the answer.
+    #[test]
+    fn text_at_an_unannounced_index_is_still_a_message_item() {
+        let mut settling = Settling::new();
+        for frame in [
+            r#"{"type":"response.output_text.delta","output_index":0,"content_index":0,"delta":"said"}"#,
+            r#"{"type":"response.output_item.done","output_index":1,
+                "item":{"type":"function_call","call_id":"c1","name":"read","arguments":"{}"}}"#,
+            r#"{"type":"response.completed","response":{"id":"resp_1"}}"#,
+        ] {
+            settling.consume_payload(frame).unwrap();
+        }
+        let settled = settling.settle().unwrap();
+
+        assert_eq!(settled.items.len(), 2, "{:?}", settled.items);
+        let OutputItem::Message { text, .. } = &settled.items[0] else {
+            panic!("the text became the item at its own index");
+        };
+        assert_eq!(text, "said");
         assert_eq!(settled.function_calls().count(), 1);
     }
 }
