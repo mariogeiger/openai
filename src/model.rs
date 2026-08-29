@@ -18,7 +18,7 @@
 
 #![allow(non_camel_case_types)]
 
-use crate::values::{CacheMode, CacheRetention, CacheTtl, ReasoningContext, ReasoningMode, api_enum};
+use crate::values::{CacheMode, CacheRetention, CacheTtl, ReasoningContext, ReasoningEffort, ReasoningMode, api_enum};
 
 api_enum! {
     /// The reasoning efforts GPT-5.6 models accept. `max` exists only here.
@@ -144,7 +144,10 @@ pub struct Gpt5_6Caching {
 }
 
 impl Default for Gpt5_6Caching {
-    /// The API's own defaults: an implicit breakpoint, 30-minute minimum life.
+    /// The API's own documented defaults: `mode` "Defaults to `implicit`", and
+    /// `ttl` "Defaults to `30m`". Both are plain fields carrying the documented
+    /// value, so the request states what the model sees rather than inheriting
+    /// a server-side default that could shift.
     fn default() -> Self {
         Self { mode: CacheMode::Implicit, ttl: CacheTtl::ThirtyMinutes }
     }
@@ -158,42 +161,60 @@ impl Default for Gpt5_6Caching {
 pub struct Gpt5_6 {
     /// Which tier to route to.
     pub tier: Gpt5_6Tier,
-    /// How much the model reasons before answering.
-    pub effort: EffortNoneToMax,
-    /// Standard or Pro execution, independent of effort.
-    pub mode: ReasoningMode,
-    /// Which earlier reasoning is rendered into this turn.
+    /// How much the model reasons before answering, when the caller says.
+    ///
+    /// `None` means the field is not sent, and the model reasons at whatever
+    /// level it documents for itself — [`ModelId::default_effort`] states that
+    /// level without imposing it. The API documents no default for
+    /// `reasoning.effort` and reports `"effort": null` on a response that never
+    /// carried one, so "told a level" and "not told" are two runtime states,
+    /// not one value and its default.
+    pub effort: Option<EffortNoneToMax>,
+    /// Standard or Pro execution, independent of effort. `None` is not sent:
+    /// the API documents no default for `reasoning.mode`.
+    pub mode: Option<ReasoningMode>,
+    /// Which earlier reasoning is rendered into this turn. Always sent, because
+    /// the API documents a default — `auto`, which the model then resolves.
     pub reasoning_context: ReasoningContext,
     /// Breakpoint mode and minimum cache lifetime.
     pub caching: Gpt5_6Caching,
 }
 
 impl Gpt5_6 {
-    /// The documented runtime defaults, stated explicitly: `medium` effort,
-    /// `standard` mode, `all_turns` context, implicit caching at `30m`.
+    /// Every documented default stated explicitly, and nothing else chosen.
     ///
-    /// Emitting them rather than relying on omission keeps the request body a
-    /// complete record of the prefix the model will see — and keeps that prefix
-    /// stable if OpenAI's defaults ever shift.
+    /// `reasoning.context` is `auto` and the caching fields are `implicit` /
+    /// `30m`, because the API documents those defaults and emitting them keeps
+    /// the request a complete record of the prefix the model will see — stable
+    /// even if OpenAI's defaults shift. `reasoning.effort` and `reasoning.mode`
+    /// have no documented default, so they start absent: the crate does not
+    /// decide how hard this model thinks.
     pub fn new(tier: Gpt5_6Tier) -> Self {
         Self {
             tier,
-            effort: EffortNoneToMax::Medium,
-            mode: ReasoningMode::Standard,
-            reasoning_context: ReasoningContext::AllTurns,
+            effort: None,
+            mode: None,
+            reasoning_context: ReasoningContext::Auto,
             caching: Gpt5_6Caching::default(),
         }
     }
 
     /// Set the reasoning effort.
     pub fn with_effort(mut self, effort: EffortNoneToMax) -> Self {
-        self.effort = effort;
+        self.effort = Some(effort);
+        self
+    }
+
+    /// Leave `reasoning.effort` unsent, so the model reasons at its own
+    /// documented level. See [`ModelId::default_effort`] for what that is.
+    pub fn without_effort(mut self) -> Self {
+        self.effort = None;
         self
     }
 
     /// Select standard or Pro execution.
     pub fn with_mode(mut self, mode: ReasoningMode) -> Self {
-        self.mode = mode;
+        self.mode = Some(mode);
         self
     }
 
@@ -210,35 +231,53 @@ impl Gpt5_6 {
         self.caching.mode = CacheMode::Explicit;
         self
     }
+
+    /// Choose the breakpoint mode and minimum cache lifetime outright.
+    ///
+    /// Caching is the caller's decision, so the whole object is settable and
+    /// not only the one corner [`Self::with_explicit_cache_only`] reaches.
+    pub fn with_caching(mut self, caching: Gpt5_6Caching) -> Self {
+        self.caching = caching;
+        self
+    }
 }
 
 /// GPT-5.5. No explicit breakpoints, no `max` effort, and extended retention is
 /// the only retention this model accepts.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Gpt5_5 {
-    /// How much the model reasons before answering.
-    pub effort: EffortNoneToXhigh,
+    /// How much the model reasons before answering, when the caller says.
+    /// `None` is not sent; this model documents `medium` for itself.
+    pub effort: Option<EffortNoneToXhigh>,
     /// Maximum cache retention. `in_memory` is refused on this model, so it is
-    /// not expressible.
+    /// not expressible. Always sent: for GPT-5.5 the reference says "only `24h`
+    /// is supported", so the one accepted value is also the documented one.
     pub retention: ExtendedRetentionOnly,
 }
 
 impl Default for Gpt5_5 {
-    /// `medium` effort — the documented default for this model.
+    /// No effort chosen, and the only retention this model accepts.
     fn default() -> Self {
-        Self { effort: EffortNoneToXhigh::Medium, retention: ExtendedRetentionOnly::TwentyFourHours }
+        Self { effort: None, retention: ExtendedRetentionOnly::TwentyFourHours }
     }
 }
 
 impl Gpt5_5 {
-    /// Default parameters. Chain `with_*` to change them.
+    /// Nothing the API does not document a default for. Chain `with_*` to
+    /// choose.
     pub fn new() -> Self {
         Self::default()
     }
 
     /// Set the reasoning effort.
     pub fn with_effort(mut self, effort: EffortNoneToXhigh) -> Self {
-        self.effort = effort;
+        self.effort = Some(effort);
+        self
+    }
+
+    /// Leave `reasoning.effort` unsent.
+    pub fn without_effort(mut self) -> Self {
+        self.effort = None;
         self
     }
 }
@@ -247,28 +286,36 @@ impl Gpt5_5 {
 /// discount — see [`Pricing`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Gpt5_5Pro {
-    /// How much the model reasons. `none` and `low` do not exist here.
-    pub effort: EffortMediumToXhigh,
-    /// Maximum cache retention.
+    /// How much the model reasons, when the caller says. `none` and `low` do
+    /// not exist here. `None` is not sent; Pro documents `high` for itself.
+    pub effort: Option<EffortMediumToXhigh>,
+    /// Maximum cache retention. Always sent: only `24h` is supported here.
     pub retention: ExtendedRetentionOnly,
 }
 
 impl Default for Gpt5_5Pro {
-    /// `high` effort — the documented default for Pro.
+    /// No effort chosen, and the only retention this model accepts.
     fn default() -> Self {
-        Self { effort: EffortMediumToXhigh::High, retention: ExtendedRetentionOnly::TwentyFourHours }
+        Self { effort: None, retention: ExtendedRetentionOnly::TwentyFourHours }
     }
 }
 
 impl Gpt5_5Pro {
-    /// Default parameters. Chain `with_*` to change them.
+    /// Nothing the API does not document a default for. Chain `with_*` to
+    /// choose.
     pub fn new() -> Self {
         Self::default()
     }
 
     /// Set the reasoning effort.
     pub fn with_effort(mut self, effort: EffortMediumToXhigh) -> Self {
-        self.effort = effort;
+        self.effort = Some(effort);
+        self
+    }
+
+    /// Leave `reasoning.effort` unsent.
+    pub fn without_effort(mut self) -> Self {
+        self.effort = None;
         self
     }
 }
@@ -278,36 +325,57 @@ impl Gpt5_5Pro {
 /// elsewhere.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Gpt5_4 {
-    /// How much the model reasons before answering.
-    pub effort: EffortNoneToXhigh,
-    /// Maximum cache retention. Both documented values are accepted.
-    pub retention: CacheRetention,
+    /// How much the model reasons before answering, when the caller says.
+    /// `None` is not sent; this model documents `none` for itself.
+    pub effort: Option<EffortNoneToXhigh>,
+    /// Maximum cache retention, when the caller chooses one.
+    ///
+    /// The one retention field this crate leaves absent, because on this model
+    /// absence is a third state and not a default: the reference says the
+    /// default "depends on your organization's data retention policy" —
+    /// `in_memory` under Zero Data Retention, `24h` otherwise. Sending either
+    /// value would override a policy the crate cannot see, so `None` means
+    /// "whatever this organization's policy says".
+    pub retention: Option<CacheRetention>,
 }
 
 impl Default for Gpt5_4 {
-    /// `none` effort — the documented default for this model, unlike GPT-5.5.
-    /// Retention defaults to `24h`, which is OpenAI's default for organizations
-    /// without Zero Data Retention; set `in_memory` explicitly under ZDR.
+    /// Nothing chosen: no effort, and retention left to the organization's own
+    /// data-retention policy.
     fn default() -> Self {
-        Self { effort: EffortNoneToXhigh::None, retention: CacheRetention::TwentyFourHours }
+        Self { effort: None, retention: None }
     }
 }
 
 impl Gpt5_4 {
-    /// Default parameters. Chain `with_*` to change them.
+    /// Nothing the API does not document a default for. Chain `with_*` to
+    /// choose.
     pub fn new() -> Self {
         Self::default()
     }
 
     /// Set the reasoning effort.
     pub fn with_effort(mut self, effort: EffortNoneToXhigh) -> Self {
-        self.effort = effort;
+        self.effort = Some(effort);
         self
     }
 
-    /// Set the maximum retention policy.
+    /// Leave `reasoning.effort` unsent.
+    pub fn without_effort(mut self) -> Self {
+        self.effort = None;
+        self
+    }
+
+    /// Set the maximum retention policy, overriding the organization's default.
     pub fn with_retention(mut self, retention: CacheRetention) -> Self {
-        self.retention = retention;
+        self.retention = Some(retention);
+        self
+    }
+
+    /// Send no `prompt_cache_retention`, so the organization's own policy
+    /// decides.
+    pub fn without_retention(mut self) -> Self {
+        self.retention = None;
         self
     }
 }
@@ -420,6 +488,25 @@ impl ModelId {
             ModelId::Gpt5_4 => (2025, 8),
         };
         YearMonth { year, month }
+    }
+
+    /// The reasoning effort this model documents for itself, for a request that
+    /// sends no `reasoning.effort` at all.
+    ///
+    /// A fact about the model, from its model page — GPT-5.6 "medium (default)",
+    /// GPT-5.5 "medium (default)", GPT-5.5 Pro "high (default)", GPT-5.4
+    /// "none (default)". Readable so a caller can *see* what omission means,
+    /// and deliberately not applied: `reasoning.effort` has no documented
+    /// default at the field level, and four models with four different levels
+    /// is exactly why. Choosing one here would be the crate deciding.
+    pub fn default_effort(self) -> ReasoningEffort {
+        match self {
+            ModelId::Gpt5_6Sol | ModelId::Gpt5_6Terra | ModelId::Gpt5_6Luna | ModelId::Gpt5_5 => {
+                ReasoningEffort::Medium
+            }
+            ModelId::Gpt5_5Pro => ReasoningEffort::High,
+            ModelId::Gpt5_4 => ReasoningEffort::None,
+        }
     }
 
     /// List price per token (see [`Pricing`] for what is not represented).
@@ -610,11 +697,41 @@ mod tests {
         assert_eq!(pro.cache_write_nanodollars_per_token, pro.input_nanodollars_per_token);
     }
 
+    /// A model out of the box has chosen no effort, on every generation. The
+    /// level each model documents for itself is a separate, readable fact.
     #[test]
-    fn documented_default_effort_differs_per_model() {
-        assert_eq!(Model::gpt_5_6_sol().effort, EffortNoneToMax::Medium);
-        assert_eq!(Model::gpt_5_5().effort, EffortNoneToXhigh::Medium);
-        assert_eq!(Model::gpt_5_5_pro().effort, EffortMediumToXhigh::High);
-        assert_eq!(Model::gpt_5_4().effort, EffortNoneToXhigh::None);
+    fn a_fresh_model_has_chosen_no_effort() {
+        assert_eq!(Model::gpt_5_6_sol().effort, None);
+        assert_eq!(Model::gpt_5_5().effort, None);
+        assert_eq!(Model::gpt_5_5_pro().effort, None);
+        assert_eq!(Model::gpt_5_4().effort, None);
+
+        assert_eq!(Model::gpt_5_6_sol().with_effort(EffortNoneToMax::Max).effort, Some(EffortNoneToMax::Max));
+        assert_eq!(Model::gpt_5_5().with_effort(EffortNoneToXhigh::Low).effort, Some(EffortNoneToXhigh::Low));
+        assert_eq!(
+            Model::gpt_5_5_pro().with_effort(EffortMediumToXhigh::Xhigh).effort,
+            Some(EffortMediumToXhigh::Xhigh)
+        );
+        assert_eq!(Model::gpt_5_4().with_effort(EffortNoneToXhigh::High).without_effort().effort, None);
+    }
+
+    /// What each model does when told nothing, straight from its model page.
+    #[test]
+    fn each_model_documents_its_own_effort_for_an_unasked_request() {
+        assert_eq!(ModelId::Gpt5_6Sol.default_effort(), ReasoningEffort::Medium);
+        assert_eq!(ModelId::Gpt5_5.default_effort(), ReasoningEffort::Medium);
+        assert_eq!(ModelId::Gpt5_5Pro.default_effort(), ReasoningEffort::High);
+        assert_eq!(ModelId::Gpt5_4.default_effort(), ReasoningEffort::None);
+    }
+
+    /// GPT-5.4's retention default is its organization's policy, not a value, so
+    /// a fresh model has chosen nothing. GPT-5.5 and Pro accept only `24h`, so
+    /// there the one accepted value is also the documented one.
+    #[test]
+    fn retention_is_chosen_only_where_openai_names_a_value() {
+        assert_eq!(Model::gpt_5_4().retention, None);
+        assert_eq!(Model::gpt_5_4().with_retention(CacheRetention::InMemory).retention, Some(CacheRetention::InMemory));
+        assert_eq!(Model::gpt_5_5().retention, ExtendedRetentionOnly::TwentyFourHours);
+        assert_eq!(Model::gpt_5_5_pro().retention, ExtendedRetentionOnly::TwentyFourHours);
     }
 }

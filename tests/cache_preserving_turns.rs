@@ -7,31 +7,38 @@
 
 use openai::content::ContentBlock;
 use openai::context::{BreakpointSlot, Context};
-use openai::model::Model;
+use openai::model::{EffortNoneToMax, Model};
 use openai::prefix::PrefixSettings;
 use openai::request::{Request, UncacheableInstructions};
 use openai::tools::{AllowedToolsMode, FunctionTool, ToolChoice};
-use openai::values::AssistantPhase;
+use openai::values::{AssistantPhase, ReasoningContext, ReasoningMode};
 use serde_json::{Value, json};
 
 fn tools() -> Vec<FunctionTool> {
     vec![
         FunctionTool::new("read_file", json!({"type": "object", "properties": {"path": {"type": "string"}}}))
-            .with_description("Read a file"),
+            .with_description("Read a file")
+            .with_strict_arguments(),
         FunctionTool::new("write_file", json!({"type": "object", "properties": {"path": {"type": "string"}}}))
-            .with_description("Write a file"),
+            .with_description("Write a file")
+            .with_strict_arguments(),
     ]
 }
 
-/// A thread's first turn, in full. Nothing is left to a server-side default, so
-/// the prefix cannot shift under the caller's feet.
+/// A thread's first turn, in full. Every field OpenAI documents a default for is
+/// stated, so the prefix cannot shift under the caller's feet; every field it
+/// documents none for is chosen here or absent, so the crate decides nothing.
 #[test]
 fn the_first_turn_of_a_thread_is_exactly_this_body() {
     let mut context = Context::new(tools());
     context.push_anchored_developer_text(BreakpointSlot::S0, "You edit files. Stable instructions.").unwrap();
     context.push_user_text("Read a.rs");
 
-    let request = Request::new(&context, PrefixSettings::new(Model::gpt_5_6_sol()))
+    let model = Model::gpt_5_6_sol()
+        .with_effort(EffortNoneToMax::Medium)
+        .with_mode(ReasoningMode::Standard)
+        .with_reasoning_context(ReasoningContext::AllTurns);
+    let request = Request::new(&context, PrefixSettings::new(model))
         .unwrap()
         .with_prompt_cache_key("agent_v1:user_42")
         .with_max_output_tokens(8_192)

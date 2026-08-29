@@ -36,17 +36,24 @@ pub struct FunctionTool {
     pub parameters: Value,
     #[serde(skip_serializing_if = "Option::is_none")]
     description: Option<String>,
-    strict: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    strict: Option<bool>,
 }
 
 impl FunctionTool {
-    /// A tool with strict argument validation on.
+    /// A tool whose argument validation is left to Responses.
     ///
-    /// Strict is the default because the alternative is the model handing you
-    /// arguments that do not match your schema, which you would then have to
-    /// re-validate on every call.
+    /// `strict` starts absent, because absence is its own documented behavior
+    /// rather than a default value: "if omitted, Responses attempts to use
+    /// strict validation when the schema is compatible, and falls back to
+    /// non-strict validation otherwise." Three states, and the crate picks
+    /// none of them — say [`Self::with_strict_arguments`] to insist, or
+    /// [`Self::with_loose_arguments`] to refuse.
+    ///
+    /// A tool's bytes are the start of the hashed prefix, so this is a choice
+    /// worth making once and reading back.
     pub fn new(name: impl Into<String>, parameters: Value) -> Self {
-        Self { kind: "function", name: name.into(), parameters, description: None, strict: true }
+        Self { kind: "function", name: name.into(), parameters, description: None, strict: None }
     }
 
     /// Add the description the model reads when deciding whether to call this.
@@ -55,10 +62,24 @@ impl FunctionTool {
         self
     }
 
+    /// Insist on strict validation, so arguments that do not match the schema
+    /// never reach you.
+    pub fn with_strict_arguments(mut self) -> Self {
+        self.strict = Some(true);
+        self
+    }
+
     /// Turn strict validation off, for a schema that uses JSON Schema features
     /// strict mode does not support.
     pub fn with_loose_arguments(mut self) -> Self {
-        self.strict = false;
+        self.strict = Some(false);
+        self
+    }
+
+    /// Send no `strict`, letting Responses use strict validation where the
+    /// schema allows it and fall back where it does not.
+    pub fn with_inferred_argument_strictness(mut self) -> Self {
+        self.strict = None;
         self
     }
 }
@@ -209,18 +230,27 @@ mod tests {
     use super::*;
     use serde_json::json;
 
+    /// `strict` has three states, and a fresh tool is in the third: absent, so
+    /// Responses decides from the schema. Both other states are the caller's to
+    /// name, and either can be taken back.
     #[test]
-    fn a_tool_is_strict_unless_told_otherwise() {
+    fn argument_strictness_is_the_caller_s_three_way_choice() {
         let tool = FunctionTool::new("get_weather", json!({"type": "object"}));
         assert_eq!(
             serde_json::to_value(&tool).unwrap(),
-            json!({"type": "function", "name": "get_weather", "parameters": {"type": "object"}, "strict": true})
+            json!({"type": "function", "name": "get_weather", "parameters": {"type": "object"}})
         );
+
+        let strict = FunctionTool::new("f", json!({})).with_strict_arguments();
+        assert_eq!(serde_json::to_value(&strict).unwrap()["strict"], true);
 
         let loose = FunctionTool::new("f", json!({})).with_loose_arguments().with_description("does f");
         let v = serde_json::to_value(&loose).unwrap();
         assert_eq!(v["strict"], false);
         assert_eq!(v["description"], "does f");
+
+        let inferred = FunctionTool::new("f", json!({})).with_strict_arguments().with_inferred_argument_strictness();
+        assert!(serde_json::to_value(&inferred).unwrap().get("strict").is_none());
     }
 
     /// The three bare-string forms must stay bare strings; the API rejects them

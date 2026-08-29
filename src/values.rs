@@ -115,9 +115,16 @@ api_enum! {
     /// Which earlier reasoning the model may render into this turn. Part of the
     /// hashed prefix, because it changes what the model is shown.
     ReasoningContext {
+        /// Let the model decide. The API's documented default: "If omitted or
+        /// set to `auto`, the model determines the context mode." So `auto` is
+        /// the spelling of the default, and the crate emits it rather than
+        /// choosing `all_turns` on the caller's behalf — the GPT-5.6 family
+        /// resolves `auto` to `all_turns` and earlier models to `current_turn`,
+        /// which is a fact about the model, not about this request.
+        Auto => "auto",
         /// Reasoning from the active turn only.
         CurrentTurn => "current_turn",
-        /// Reasoning from earlier turns too. The GPT-5.6 family's default.
+        /// Reasoning from earlier turns too.
         AllTurns => "all_turns",
     }
 }

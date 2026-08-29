@@ -5,6 +5,106 @@ All notable changes to this crate are documented here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.3.0] — 2026-08-29
+
+The caller chooses every value, and the crate invents none.
+
+`Request::new` used to render `reasoning.effort`, `reasoning.mode`,
+`prompt_cache_retention` on GPT-5.4, and a function tool's `strict` whether the
+caller had asked for them or not — and there was no way at all to say
+"send nothing here". An imposed `reasoning.effort` made a model reason at
+`medium` when the caller meant to let the model use its own documented level.
+
+The rule now written down in `CLAUDE.md` §3 and §5, shared with the sibling
+`anthropic` crate: a field OpenAI **documents a default for** is a plain field
+carrying that documented value and is *always* emitted, so the body is a
+complete record of what the model sees and stays stable if OpenAI's defaults
+shift. A field OpenAI **documents no default for** is an `Option`, omitted when
+absent, because presence is then a real runtime distinction. Which shape a field
+gets is read off the API reference, not chosen here.
+
+### Changed — breaking
+
+- `reasoning.effort` is now sent only when chosen. Every model type's `effort`
+  is `Option<_>` and starts `None`; `with_effort` still takes a bare effort, and
+  `without_effort` takes it back off. `PrefixSettings::effort` returns
+  `Option<ReasoningEffort>`.
+
+  **Migration:** a caller who wants the old behavior names the level, which was
+  always that model's own documented default — `Model::gpt_5_6_sol().with_effort(EffortNoneToMax::Medium)`,
+  `Model::gpt_5_5().with_effort(EffortNoneToXhigh::Medium)`,
+  `Model::gpt_5_5_pro().with_effort(EffortMediumToXhigh::High)`,
+  `Model::gpt_5_4().with_effort(EffortNoneToXhigh::None)`. A caller who wants the
+  model to decide changes nothing. `ModelId::default_effort` states each level as
+  a readable fact, so omission is legible without being imposed.
+
+- `reasoning.mode` is now sent only when chosen. `Gpt5_6::mode` is
+  `Option<ReasoningMode>` and starts `None`. **Migration:**
+  `.with_mode(ReasoningMode::Standard)` to keep sending `standard`.
+
+- `reasoning.context` now defaults to the value OpenAI documents. The reference
+  says "if omitted or set to `auto`, the model determines the context mode", so
+  `ReasoningContext` gains an `Auto` variant and `Gpt5_6::reasoning_context`
+  starts there instead of at `AllTurns` — the GPT-5.6 family resolves `auto` to
+  `all_turns` anyway, so behavior is unchanged while the choice stops being the
+  crate's. **Migration:** `.with_reasoning_context(ReasoningContext::AllTurns)`
+  to pin the value on the wire.
+
+- The whole `reasoning` object now vanishes when every field inside it is absent.
+  An empty `"reasoning": {}` is a different request from no `reasoning`, and only
+  the second means "no reasoning was configured".
+
+- `prompt_cache_retention` on GPT-5.4 is now sent only when chosen.
+  `Gpt5_4::retention` is `Option<CacheRetention>` and starts `None`, with
+  `without_retention` to clear it. GPT-5.4 alone documents no value as its
+  default — the reference says it "depends on your organization's data retention
+  policy", `in_memory` under Zero Data Retention and `24h` otherwise — so any
+  value the crate sent would override a policy it cannot see. GPT-5.5 and
+  GPT-5.5 Pro are unchanged: `24h` is the only value they accept, so it stays a
+  plain always-emitted field. **Migration:**
+  `Model::gpt_5_4().with_retention(CacheRetention::TwentyFourHours)` to keep
+  sending `24h`.
+
+- A function tool's `strict` is now sent only when chosen. `FunctionTool::new`
+  no longer imposes `true`, because omission has its own documented behavior:
+  "Responses attempts to use strict validation when the schema is compatible,
+  and falls back to non-strict validation otherwise" — a third state that
+  neither `true` nor `false` can spell. **Migration:** `.with_strict_arguments()`
+  to keep sending `true`; `with_loose_arguments` is unchanged, and
+  `with_inferred_argument_strictness` returns to omission.
+
+### Added
+
+- Every setting now has a way to say it in both directions, so no choice is
+  one-way: `Request::with_storage` and `without_streaming` beside
+  `without_storage` and `streaming`; `PrefixSettings::with_parallel_tool_calls`,
+  `without_compaction`, `without_reasoning_summary`; `Gpt5_6::with_caching` for
+  the whole `prompt_cache_options` object rather than only its `explicit`
+  corner; `without_effort` on all four model types; `Gpt5_4::without_retention`;
+  `FunctionTool::with_strict_arguments` and
+  `with_inferred_argument_strictness`.
+
+- `ModelId::default_effort` — the effort each model's own page documents for a
+  request that sends none. Stated so a caller can see what omission means;
+  deliberately not applied, because four models with four different levels is
+  precisely why the field has no default at the field level.
+
+- `ReasoningContext::Auto`, the value the reference names as this field's
+  default.
+
+- `CLAUDE.md`, stating the design philosophy this crate shares with the sibling
+  `anthropic` crate, adapted to the Responses API.
+
+### Unchanged, and deliberately so
+
+`store`, `parallel_tool_calls`, `text.format`, `text.verbosity`,
+`prompt_cache_options.mode` and `.ttl`, `tool_choice`, and `stream` remain plain
+fields that are always emitted, because OpenAI documents a default for each and
+a request should be a complete record of what the model sees. `store` is the case
+that proves the rule: it stays `true` by default and always on the wire, and a
+caller who wants nothing retained writes `without_storage` and can read the
+`false` back off the request.
+
 ## [0.2.2] — 2026-08-29
 
 ### Fixed

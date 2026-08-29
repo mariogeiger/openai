@@ -29,6 +29,29 @@
 //! never to top-level `instructions`, and the field that controls cache
 //! lifetime differs by model generation.
 //!
+//! # Who chooses a value
+//!
+//! Every value the API accepts is the caller's to choose, and the crate invents
+//! none. Two shapes carry that, and which one a field gets is read off OpenAI's
+//! reference rather than decided here:
+//!
+//! * **The API documents a default.** The field is a plain, non-`Option` field
+//!   whose `Default` is the documented value, and it is *always* emitted. So the
+//!   body is a complete record of what the model sees, and it stays that way the
+//!   day OpenAI changes a default. `store`, `parallel_tool_calls`,
+//!   `text.format`, `text.verbosity`, `reasoning.context`,
+//!   `prompt_cache_options.mode` and `.ttl` are these.
+//! * **The API documents no default.** Then presence is a real runtime
+//!   distinction — told versus not told — and the field is an `Option` that is
+//!   omitted when absent. `reasoning.effort`, `reasoning.mode`,
+//!   `reasoning.summary`, `context_management`, `max_output_tokens`,
+//!   `instructions`, `prompt_cache_key`, and GPT-5.4's
+//!   `prompt_cache_retention` are these.
+//!
+//! An enclosing object disappears when every field inside it is absent: an empty
+//! `"reasoning": {}` is a different request from no `reasoning`, and only the
+//! second one means "the caller configured no reasoning".
+//!
 //! # Worked example
 //!
 //! ```
