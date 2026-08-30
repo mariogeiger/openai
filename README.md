@@ -7,7 +7,13 @@ POST it, then feed the streamed frames back in to get a typed response.
 
 ## Mission
 
-Two kinds of mistake cost real money on this API, and neither shows up as a
+**Represent the entire OpenAI Responses API faithfully in types.** That is why the
+crate exists; [`SOUL.md`](SOUL.md) states it and the principles that follow from
+it. A parameter the crate cannot express is a caller who has to hand-roll JSON and
+lose every guarantee below, so a gap in coverage is a defect rather than a scope
+decision.
+
+Two kinds of mistake are what the type work buys, and neither shows up as a
 compile error in a hand-rolled `serde_json::json!`:
 
 1. **Parameter combinations the API refuses.** `max` reasoning effort exists on
@@ -87,6 +93,11 @@ reqwest::Client::new()
 
 | Mistake | What stops it |
 | --- | --- |
+| `stream_options` without `stream` | `Transport` is a sum type; the API answers *"only allowed when `stream` is enabled"* |
+| A file's inline bytes as bare base64 | `FileSource::Inline` takes the media type and the crate builds the data URL |
+| A refusal read as the answer | `Settled::text` is answer text only; the refusal is its own field |
+| More than 16 metadata pairs, or an over-long key or value | `Metadata::new` checks all three documented limits |
+| `top_logprobs` on a reasoning model | there is no field; every model here refuses it |
 | An assistant message spelling its text `input_text` | `Message::Assistant` holds `OutputBlock`, which has no such variant, and `InputRole` has no `Assistant` |
 | A `developer` or `user` message spelling its text `output_text` | `Message::Input` holds `InputBlock`, which has no such variant |
 | A cache breakpoint on a refusal | `Refusal` has no breakpoint field; the API answers `Unknown parameter` to one |
@@ -170,9 +181,16 @@ pairing is answered with the other set enumerated in the error.
 | `developer`, `user` | `Message::Input { role: InputRole, content: Vec<InputBlock> }` | `input_text`, `input_image`, `input_file`, `scoped_content`, `input_audio` |
 | `assistant` | `Message::Assistant { phase, content: Vec<OutputBlock> }` | `output_text`, `refusal` |
 
-`InputBlock` models `input_text` and `input_image`; `OutputBlock` models both
-output kinds. A function result holds `InputBlock`s, because a tool result is
-content the model reads.
+`InputBlock` models `input_text`, `input_image`, and `input_file`; `OutputBlock`
+models both output kinds. A function result holds `InputBlock`s, because a tool
+result is content the model reads.
+
+A file's inline bytes go on the wire as a **data URL**, not as bare base64. The
+reference calls `file_data` "the content of the file"; measured live, bare base64
+is answered `Invalid 'input[0].content[0].file_data'` and the same bytes as
+`data:application/pdf;base64,…` return 200 with the document read. So
+`FileSource::Inline` takes the media type separately and the crate builds the
+URL.
 
 ## Modeled
 
@@ -203,6 +221,9 @@ for line in sse_body.lines() {
 // never sent a terminal event.
 let settled = settling.settle()?;
 match &settled.outcome {
+    // `text` is answer text only. A refusal is `settled.refusal` and reasoning is
+    // `settled.reasoning_summary`, because a refusal folded into the answer reads
+    // as the answer.
     Outcome::Completed => println!("{}", settled.text),
     Outcome::Incomplete { reason } => println!("cut short: {reason:?}"),
     Outcome::Failed { error } | Outcome::Errored { error } => println!("{}", error.message),
@@ -228,21 +249,70 @@ therefore has no method that returns a response, and `Settled` is reachable only
 through `Settling::settle`, which returns `SettleError::Truncated` when no
 terminal event ever arrived.
 
-Covered events: `response.output_text.delta`,
-`response.reasoning_summary_text.delta`, `response.output_item.added`,
-`response.output_item.done`, `response.completed`, `response.failed`,
-`response.incomplete`, and the bare `error` event. The other 50 documented
-`response.*` events decode as `Unmodeled`; `CHANGELOG.md` says why for each
-group.
+**58 documented events are not 58 shapes.** Most are one kind of thing
+parameterized by which stream it belongs to, so the variants are the kinds and
+the parameter is a field:
+
+| variant | events it covers |
+| --- | --- |
+| `TextDelta` / `TextDone` + `TextStream` | 8: answer, refusal, reasoning summary, raw reasoning |
+| `Part` + `TextStream` + `PartBoundary` | 4: content and reasoning-summary part boundaries |
+| `HostedToolLifecycle` + `HostedTool` + `HostedToolPhase` | 18: every built-in tool's progress |
+| `HostedToolInputDelta` / `…Done` | 6: code, MCP arguments, custom-tool input |
+| `Audio` + `AudioStream` | 4: generated audio and its transcript |
+| `ResponseProgress` + `ProgressStage` | 3: `created`, `queued`, `in_progress` |
+| the rest | items, function arguments, annotations, partial images, the terminal four |
+
+53 of the 58 are modeled. The five that are not are the shell-call family, whose
+payload is a structured command list a caller running commands must agree with
+exactly; a shell call's lifecycle still arrives through the output-item events.
+
+The factoring is checked both ways in `tests/documented_event_coverage.rs`, whose
+fixture is the Example block of every section of OpenAI's streaming-events page:
+every documented event must decode, and every decoded event must name back the
+exact wire string it came from.
+
+## Reading a buffered response
+
+A `stream: false` request answers with one body, and `Response` decodes it —
+sharing its implementation with the snapshot a terminal streaming event carries,
+because they are the same object.
+
+```rust
+let response = openai::response::Response::decode(&body)?;
+if response.is_completed() {
+    println!("{}", response.text());          // answer text only
+}
+for call in response.function_calls() { /* … */ }
+for reasoning in response.replayable_reasoning() { /* feed the next turn */ }
+println!("{}", response.raw["created_at"]);   // fields this type does not name
+```
+
+It is deliberately not a `Settled`. That type means *a stream that reached a
+terminal event*; a buffered body either arrived whole or the request failed, and
+there is nothing to check.
 
 ## Not modeled
 
 No HTTP client, no async runtime, no SSE transport — you own the socket and hand
-this crate one `data:` payload at a time. Of the response body, only `usage` and
-the streamed shapes are deserialized. No Chat Completions. No built-in or MCP
-tools — function tools only. No stateful continuation (`previous_response_id`,
-`conversation`): only the stateless path lets the caller control the prefix byte
-for byte.
+this crate one `data:` payload at a time. No Chat Completions, and no other
+endpoint: one endpoint, covered whole.
+
+**Hosted-tool definitions.** Their *events* and *call items* decode, so a caller
+who enables one through a hand-written tool array can read what comes back. What
+is missing is the request-side definitions that turn them on — 15 tool types, each
+with its own configuration.
+
+**Stateful continuation** — `previous_response_id` and `conversation` — is a
+mission-level exclusion rather than a gap. Both hand prefix control to the
+server: the caller stops knowing which bytes precede its input, so it cannot
+reason about the cache at all. Only the stateless path lets the caller control the
+rendered prefix byte for byte.
+
+**Sampling parameters every modeled model refuses.** `Temperature` is a
+validating newtype with no field to put it on; `top_logprobs` has none either,
+because every model here answers *"logprobs are not supported with reasoning
+models."*
 
 ## Install
 

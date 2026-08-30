@@ -5,6 +5,122 @@ All notable changes to this crate are documented here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+Entries below 0.5.0 refer to `CLAUDE.md`, which held both the design philosophy
+and the working instructions. 0.5.0 split it into `SOUL.md` and `AGENTS.md`; the
+older references are left as they were written, because a changelog records what
+was true at the time.
+
+## [0.5.0] — 2026-08-30
+
+The mission stated: **represent the entire OpenAI Responses API faithfully in
+types.** This release closes most of the gap between that and what the crate
+covered — nine body parameters, 46 more streaming events, the buffered response
+body, and file inputs — and states the mission in a new `SOUL.md` so a gap reads
+as a defect rather than as a scope decision.
+
+Four things were found only by sending real requests, and each changed a design:
+
+| what the reference says | what the endpoint does |
+| --- | --- |
+| `stream_options` is an independent parameter | refused without `stream`: *"only allowed when 'stream' is enabled"* |
+| `file_data` is "the content of the file" | bare base64 is a 400; it must be a `data:` URL |
+| `top_logprobs` is 0–20 | *"logprobs are not supported with reasoning models"* — every model here |
+| counts are numbers | a gateway sends `"input_tokens": null` beside real numbers |
+
+### Documents
+
+- **`SOUL.md`** is new: the mission, and the stable design principles that were
+  spread through `CLAUDE.md` — the tool array as the first bytes of the hashed
+  prefix, cache writes as a bounded resource, inventing no defaults, the role
+  deciding its content vocabulary, impossibility claims tested by `compile_fail`.
+- **`AGENTS.md`** replaces `CLAUDE.md`: the four required checks, where each
+  file's mission lies, how to add API surface, how to verify live without
+  touching a credential.
+
+### Added — request
+
+- `include`, as `Include` with all eight documented entries.
+  `Request::with_replayable_reasoning` names the one that matters: without
+  `reasoning.encrypted_content` the API never sends the payload that makes a
+  reasoning item replayable, so `ReasoningItem::replayable` and
+  `Context::push_reasoning` — both already present — were unreachable in practice.
+- `service_tier`, `metadata`, `safety_identifier`, `truncation`, `max_tool_calls`,
+  `background`, and `stream_options.include_obfuscation`.
+- `Metadata`, holding all three documented limits — 16 pairs, 64-character keys,
+  512-character values — counted in characters, as the reference states them.
+- `content::InputFile` and `content::FileSource`: the fourth block in the input
+  vocabulary the crate already documented, and the only one that had no type.
+
+### Added — response
+
+- `response::Response`, the body a `stream: false` request answers with. Shares
+  its decoder with the snapshot a terminal streaming event carries, because they
+  are the same object. `Response::raw` keeps the whole body for the fields this
+  crate does not name.
+- 46 more streaming events, bringing coverage to 53 of the 58 documented. The
+  variants are *kinds* parameterized by which stream they belong to, not one per
+  event: `TextDelta` plus a `TextStream` covers eight event types,
+  `HostedToolLifecycle` plus a `HostedTool` and a `HostedToolPhase` covers
+  eighteen. Twelve tools times six phases means the events OpenAI has not shipped
+  yet cost nothing.
+- `Settled::refusal`, `::reasoning`, `::hosted_tool_events`,
+  `::part_disagreements`. The last is the free check OpenAI's redundancy buys:
+  every run of text arrives twice, as deltas and whole, so a dropped or duplicated
+  delta is detectable without any extra request.
+- `OutputItem::HostedToolCall`, naming the tool and carrying the rest of the item
+  undecoded — the useful fields differ per tool, and typing all twelve shapes
+  would be the crate guessing which ones matter.
+- `OutputItem::Message::refusal`, `ReasoningItem::summary`,
+  `ResponseSnapshot::status` and `::service_tier`.
+
+### Changed — breaking
+
+- `Request::stream: bool` becomes `Request::transport: Transport`, either
+  `Buffered` or `Streamed { include_obfuscation }`. The API refuses
+  `stream_options` without `stream`, which makes it a cross-field invariant and so
+  a sum type. **Migration:** `request.stream = true` becomes `.streaming()`;
+  reading it becomes `.is_streaming()`. `streaming()` and `without_streaming()`
+  are unchanged.
+- `StreamEvent::OutputTextDelta` and `::ReasoningSummaryTextDelta` become one
+  `TextDelta { stream, output_index, part_index, delta }`. **Migration:** match
+  `stream` against `TextStream::Output` or `::ReasoningSummary`, or call
+  `answer_text_delta()`, which answers the question a display actually asks.
+- `StreamEvent::kind` returns `Cow<str>`: a factored variant composes its type
+  from its own fields rather than storing a string that could drift from them.
+- `OutputItem`, `ResponseSnapshot`, `CalledFunction`, `ReasoningItem`,
+  `FunctionArguments` and `ResponseError` move to a new `items` module; `Settled`
+  and `Outcome` move to `settled`. New modules `hosted`, `response`, and internal
+  `decode` and `body`. The split is by mission, not by size: `stream` states what
+  events are and `decode` how bytes become them; `items` holds the nouns and
+  `stream` the verbs.
+- `background: false` now always appears in the body, like every other field with
+  a documented default.
+- `api_enum!` derives `Ord`. These enums are keys as often as values.
+
+### Fixed
+
+- **A refusal-only turn produced no message item at all.** Item reconstruction
+  scanned only the answer stream, so a refusal reached `Settled::refusal` but
+  nowhere in `items` — a caller iterating items saw an empty response. Found by
+  writing the test for the refusal/answer split.
+- **A `usage` object with an explicit `null` count failed to decode**, taking the
+  cache accounting down with it — the one measurement this crate exists to
+  provide. Absent, `null`, and a number now all read as "nothing of that kind",
+  which is zero rather than unknown.
+- **`response.created` and `response.queued` were indistinguishable** after
+  decoding, because both report the status `queued`. Hence `ProgressStage`, which
+  is faithful where the status is not. Caught by the round-trip half of the
+  coverage test.
+
+### Verification
+
+`tests/documented_event_coverage.rs` decodes all 58 documented events from a
+fixture transcribed off OpenAI's own page, and checks that each modeled one names
+its wire type back. Three real captures are in `tests/data/`: a streamed prose
+answer, a streamed two-call tool turn with replayable reasoning, and a buffered
+body. Every added request field was sent to a live endpoint and echoed back,
+including a one-page PDF the model read correctly.
+
 ## [0.4.0] — 2026-08-30
 
 The role decides the content vocabulary, so the wrong pairing does not compile.
