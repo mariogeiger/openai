@@ -30,6 +30,17 @@ Three concrete splits this buys:
 
 Mutually exclusive settings are sum types, not independent optional fields the caller must keep in sync — `ImageSource` is `Url` or `FileId`, never two fields to reconcile; `TextFormat` is `Text` or `JsonSchema`, never a type tag beside a nullable schema.
 
+*A field whose legal values depend on another field is not a separate field.* One shared `ContentBlock` type once served two roles that accept different vocabularies, so an assistant message spelled its text `input_text` and every request carrying an assistant turn — nearly every real conversation — was refused with `Invalid value: 'input_text'. Supported values are: 'output_text' and 'refusal'.` A `match` on the role at serialization time would have fixed the bytes and left the wrong pairing writable. The fix is that the role and its vocabulary are one value: `Message::Input { role: InputRole, content: Vec<InputBlock> }` or `Message::Assistant { phase, content: Vec<OutputBlock> }`. `InputRole` has no `Assistant` variant, and there is no type that holds an assistant role beside an input block. The vocabularies, measured live in both directions:
+
+| role | blocks it accepts |
+| --- | --- |
+| `developer`, `user` | `input_text`, `input_image`, `input_file`, `scoped_content`, `input_audio` |
+| `assistant` | `output_text`, `refusal` |
+
+The same rule puts `phase` on the assistant variant as a plain field rather than an `Option` on a shared struct: where it exists it always means something, and where it does not it is not a field.
+
+A capability that only some values have is a method returning `Option`, never a `bool` beside an unchecked accessor. A `Refusal` accepts no `prompt_cache_breakpoint` — the API answers `Unknown parameter` to one — so it has no such field, and `BreakpointableBlock::breakpoint_site` returns `None` for it. Slot bookkeeping asks for a site and gets one or nothing; it needs no case for refusals, and a future block kind that cannot be marked needs no change there either.
+
 An invariant is held by the type or it is not held. A doc comment saying a field is "set by" some method, or a private constructor that checks what a public field lets a caller assign around, is a convention the compiler does not know about. Two rules follow, and they are not in tension:
 
 *A closed API vocabulary is an enum, never a string.* A `&'static str` field accepts any string; an enum with no invalid variant accepts only what the API does. So the enum goes in the field and the string comes out at serialization time — see `api_enum!`, which puts each wire literal in the crate exactly once. A public field of such an enum is safe and preferable: it keeps pattern matching available for free.
@@ -37,6 +48,8 @@ An invariant is held by the type or it is not held. A doc comment saying a field
 *A cross-field invariant means private fields plus readers.* Where validity is a relation between fields or against a model fact (`max_output_tokens` against *this model's* maximum, breakpoints against *this mode's* budget), no single field's type carries it, so the checking constructor must be the only way in. Where there is no such relation, do not hide the field.
 
 The `compile_fail` doctest is how a claim of impossibility gets tested. A claim only a comment makes is the failure mode this section exists to prevent.
+
+And a claim of *validity* is tested against the reference, not against the crate. A test that only serializes agrees with whatever the crate currently emits, which is how the `input_text` defect survived a full suite: every assertion asked "did the crate write what the crate writes?". `tests/role_content_vocabulary.rs` transcribes each role's documented vocabulary and checks every block of a rendered body against it, so the assertion fails when the crate and the reference disagree rather than when the crate changes.
 
 ## 3. Model runtime behavior, not HTTP field presence
 

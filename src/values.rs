@@ -49,20 +49,25 @@ macro_rules! api_enum {
 pub(crate) use api_enum;
 
 api_enum! {
-    /// Who an input message speaks as. `Developer` and `User` outrank each
-    /// other in that order; `Assistant` replays what the model said before.
+    /// Which of the two roles that speak the *input* vocabulary is speaking.
+    /// `Developer` outranks `User`.
+    ///
+    /// `assistant` is absent, and that absence is the fix for a 400 the crate
+    /// used to make expressible: OpenAI accepts `input_text` and `input_image`
+    /// under these two roles and only `output_text` and `refusal` under
+    /// `assistant`. So the assistant role is not a third variant here — it is
+    /// [`Message::Assistant`](crate::content::Message::Assistant), which
+    /// carries the other vocabulary.
     ///
     /// `system` exists on the wire as a legacy alias for `developer` and is
-    /// absent here: two spellings of one role would be two different prefixes
+    /// absent too: two spellings of one role would be two different prefixes
     /// for the same meaning, which is exactly the silent cache miss this crate
     /// is built to prevent.
-    Role {
+    InputRole {
         /// Instructions from the application. Outranks `user`.
         Developer => "developer",
         /// Input from the person using the application.
         User => "user",
-        /// A previous model turn, replayed as context.
-        Assistant => "assistant",
     }
 }
 
@@ -266,7 +271,7 @@ mod tests {
 
     #[test]
     fn as_str_matches_the_wire() {
-        assert_eq!(Role::Developer.as_str(), "developer");
+        assert_eq!(InputRole::Developer.as_str(), "developer");
         assert_eq!(CacheMode::Explicit.as_str(), "explicit");
         assert_eq!(CacheTtl::ThirtyMinutes.as_str(), "30m");
         assert_eq!(CacheRetention::TwentyFourHours.as_str(), "24h");

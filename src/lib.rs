@@ -5,6 +5,22 @@
 //! prompt cache. It builds a validated, `Serialize` body; the caller owns the
 //! HTTP stack.
 //!
+//! # The role decides the content vocabulary
+//!
+//! OpenAI accepts different content blocks under different roles, and the two
+//! sets are disjoint. Measured against the live endpoint, in both directions:
+//!
+//! | role | blocks it accepts |
+//! | --- | --- |
+//! | `developer`, `user` | `input_text`, `input_image`, `input_file`, `scoped_content`, `input_audio` |
+//! | `assistant` | `output_text`, `refusal` |
+//!
+//! So a message is a [`Message`](content::Message) *variant* carrying its own
+//! block type — [`InputBlock`](content::InputBlock) or
+//! [`OutputBlock`](content::OutputBlock) — rather than a role beside a
+//! vocabulary that might not match it. The wrong pairing is not a request the
+//! API refuses; it is a sentence the types cannot form.
+//!
 //! # Why the types are shaped this way
 //!
 //! OpenAI hashes the *rendered* prefix of a request, in this order: hidden

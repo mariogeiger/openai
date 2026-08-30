@@ -439,7 +439,7 @@ impl Serialize for Request<'_> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::content::ContentBlock;
+    use crate::content::InputBlock;
     use crate::context::{BreakpointSlot, Context};
     use crate::model::{EffortMediumToXhigh, EffortNoneToMax, EffortNoneToXhigh, Gpt5_6Tier};
     use crate::tools::AllowedToolsMode;
@@ -846,7 +846,7 @@ mod tests {
         context.push_user_text("Read a.rs");
         context.push_reasoning("rs_1", "opaque");
         context.push_function_call("call_1", "read_file", r#"{"path":"a.rs"}"#);
-        context.push_function_call_output_blocks("call_1", vec![ContentBlock::text("fn main() {}")]);
+        context.push_function_call_output_blocks("call_1", vec![InputBlock::text("fn main() {}")]);
         context.roll_breakpoint(BreakpointSlot::S1).unwrap();
         context.push_assistant_text(crate::values::AssistantPhase::FinalAnswer, "It is a main function.");
 

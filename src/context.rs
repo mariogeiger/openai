@@ -19,11 +19,11 @@
 //!   to be rolled or cleared.
 
 use crate::content::{
-    ContentBlock, FunctionCall, FunctionCallOutput, FunctionOutput, InputItem, Message, PromptCacheBreakpoint,
-    ReplayedReasoning,
+    FunctionCall, FunctionCallOutput, FunctionOutput, InputBlock, InputItem, Message, OutputBlock,
+    PromptCacheBreakpoint, ReplayedReasoning,
 };
 use crate::tools::{AllowedTools, AllowedToolsError, AllowedToolsMode, FunctionTool};
-use crate::values::{AssistantPhase, Role};
+use crate::values::{AssistantPhase, InputRole};
 
 /// How many breakpoints a request may write. The API's hard ceiling, and hence
 /// the number of slots.
@@ -218,37 +218,51 @@ impl Context {
     // ── Appending ───────────────────────────────────────────────────────────
 
     /// Append a developer message. Developer instructions outrank user input.
-    pub fn push_developer(&mut self, blocks: Vec<ContentBlock>) {
-        self.items.push(InputItem::Message(Message { role: Role::Developer, content: blocks, phase: None }));
+    pub fn push_developer(&mut self, blocks: Vec<InputBlock>) {
+        self.push_input(InputRole::Developer, blocks);
     }
 
     /// Append a one-block developer message.
     pub fn push_developer_text(&mut self, text: impl Into<String>) {
-        self.push_developer(vec![ContentBlock::text(text)]);
+        self.push_developer(vec![InputBlock::text(text)]);
     }
 
     /// Append a user message.
-    pub fn push_user(&mut self, blocks: Vec<ContentBlock>) {
-        self.items.push(InputItem::Message(Message { role: Role::User, content: blocks, phase: None }));
+    pub fn push_user(&mut self, blocks: Vec<InputBlock>) {
+        self.push_input(InputRole::User, blocks);
     }
 
     /// Append a one-block user message.
     pub fn push_user_text(&mut self, text: impl Into<String>) {
-        self.push_user(vec![ContentBlock::text(text)]);
+        self.push_user(vec![InputBlock::text(text)]);
+    }
+
+    /// Append a message from either input-vocabulary role, chosen at runtime.
+    pub fn push_input(&mut self, role: InputRole, blocks: Vec<InputBlock>) {
+        self.items.push(InputItem::Message(Message::Input { role, content: blocks }));
     }
 
     /// Append an assistant message, labelled commentary or final answer.
     ///
+    /// The blocks are the *output* vocabulary — `output_text` or `refusal` —
+    /// because that is what OpenAI accepts under this role. An `input_text`
+    /// block here was the 400 this type split exists to prevent.
+    ///
     /// The label is required rather than optional because OpenAI asks that it be
     /// preserved on every replayed assistant message, and a missing label makes
     /// a preamble look like a finished answer.
-    pub fn push_assistant(&mut self, phase: AssistantPhase, blocks: Vec<ContentBlock>) {
-        self.items.push(InputItem::Message(Message { role: Role::Assistant, content: blocks, phase: Some(phase) }));
+    pub fn push_assistant(&mut self, phase: AssistantPhase, blocks: Vec<OutputBlock>) {
+        self.items.push(InputItem::Message(Message::Assistant { phase, content: blocks }));
     }
 
-    /// Append a one-block assistant message.
+    /// Append a one-block assistant message holding what the model said.
     pub fn push_assistant_text(&mut self, phase: AssistantPhase, text: impl Into<String>) {
-        self.push_assistant(phase, vec![ContentBlock::text(text)]);
+        self.push_assistant(phase, vec![OutputBlock::text(text)]);
+    }
+
+    /// Append a one-block assistant message holding a refusal the model gave.
+    pub fn push_assistant_refusal(&mut self, phase: AssistantPhase, refusal: impl Into<String>) {
+        self.push_assistant(phase, vec![OutputBlock::refusal(refusal)]);
     }
 
     /// Append a function call the model made, with its arguments exactly as the
@@ -279,7 +293,7 @@ impl Context {
     /// Append a function result as content blocks, so a breakpoint can mark its
     /// end. OpenAI recommends exactly this in long agent threads: a breakpoint
     /// after each tool result preserves the earlier prefix when the thread forks.
-    pub fn push_function_call_output_blocks(&mut self, call_id: impl Into<String>, blocks: Vec<ContentBlock>) {
+    pub fn push_function_call_output_blocks(&mut self, call_id: impl Into<String>, blocks: Vec<InputBlock>) {
         self.items.push(InputItem::FunctionCallOutput(FunctionCallOutput {
             call_id: call_id.into(),
             output: FunctionOutput::Blocks(blocks),
@@ -386,18 +400,16 @@ impl Context {
         Ok(())
     }
 
-    /// The last block of the last item that has one. Items without blocks — a
-    /// function call, a string-valued output, a reasoning item — are skipped,
-    /// because the nearest legal boundary is the one the caller means.
+    /// The last block, of the last item, that can carry a breakpoint. Sites the
+    /// API refuses are skipped — a function call, a string-valued output, a
+    /// reasoning item, a refusal — because the nearest legal boundary is the one
+    /// the caller means.
     fn tail_position(&self) -> Option<Position> {
-        self.items.iter().enumerate().rev().find_map(|(item, entry)| match entry {
-            InputItem::Message(m) => m.content.len().checked_sub(1).map(|block| Position { item, block }),
-            InputItem::FunctionCallOutput(o) => match &o.output {
-                FunctionOutput::Blocks(b) => b.len().checked_sub(1).map(|block| Position { item, block }),
-                FunctionOutput::Text(_) => None,
-            },
-            InputItem::FunctionCall(_) | InputItem::Reasoning(_) => None,
-        })
+        self.items
+            .iter()
+            .enumerate()
+            .rev()
+            .find_map(|(item, entry)| entry.last_breakpoint_site().map(|block| Position { item, block }))
     }
 
     fn reject_if_marked_by_another(&self, slot: BreakpointSlot, position: Position) -> Result<(), BreakpointError> {
@@ -410,8 +422,10 @@ impl Context {
     }
 
     fn mark(&mut self, position: Position, present: bool) {
-        let blocks = self.items[position.item].breakpointable_blocks_mut();
-        *blocks[position.block].breakpoint_mut() = present.then(PromptCacheBreakpoint::explicit);
+        let site = self.items[position.item]
+            .breakpoint_site_mut(position.block)
+            .expect("a Position is only ever built from a block that accepts a breakpoint");
+        *site = present.then(PromptCacheBreakpoint::explicit);
     }
 }
 
@@ -594,7 +608,7 @@ mod tests {
         let mut context = Context::new(tools());
         context.push_user_text("go");
         context.push_function_call("call_1", "read_file", "{}");
-        context.push_function_call_output_blocks("call_1", vec![ContentBlock::text("contents")]);
+        context.push_function_call_output_blocks("call_1", vec![InputBlock::text("contents")]);
         context.roll_breakpoint(BreakpointSlot::S0).unwrap();
 
         let v = serde_json::to_value(context.items()).unwrap();
@@ -605,8 +619,8 @@ mod tests {
     fn a_breakpoint_can_mark_the_last_block_of_a_multi_block_message() {
         let mut context = Context::new(vec![]);
         context.push_user(vec![
-            ContentBlock::text("look at this"),
-            ContentBlock::image(ImageSource::FileId("file-1".into()), ImageDetail::Low),
+            InputBlock::text("look at this"),
+            InputBlock::image(ImageSource::FileId("file-1".into()), ImageDetail::Low),
         ]);
         context.roll_breakpoint(BreakpointSlot::S0).unwrap();
 
