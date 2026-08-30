@@ -5,7 +5,7 @@
 //! prefix *extends* the first's rather than differing from it. That is the whole
 //! claim of the crate, and it is invisible to any single-request test.
 
-use openai::content::ContentBlock;
+use openai::content::InputBlock;
 use openai::context::{BreakpointSlot, Context};
 use openai::model::{EffortNoneToMax, Model};
 use openai::prefix::PrefixSettings;
@@ -123,7 +123,7 @@ fn the_second_turn_extends_the_first_prefix_byte_for_byte() {
     // the assistant turn, then roll a second breakpoint onto the tool result.
     context.push_reasoning("rs_1", "opaque-reasoning-payload");
     context.push_function_call("call_1", "read_file", r#"{"path":"a.rs"}"#);
-    context.push_function_call_output_blocks("call_1", vec![ContentBlock::text("fn main() {}")]);
+    context.push_function_call_output_blocks("call_1", vec![InputBlock::text("fn main() {}")]);
     context.roll_breakpoint(BreakpointSlot::S1).unwrap();
     context.push_assistant_text(AssistantPhase::FinalAnswer, "It is a main function.");
     context.push_user_text("Now rename it.");

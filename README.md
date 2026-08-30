@@ -20,7 +20,10 @@ compile error in a hand-rolled `serde_json::json!`:
    the input items. Change any byte and every cached token after it is gone.
 
 This crate makes the first kind unrepresentable and the second kind hard to
-write by accident.
+write by accident. The sharpest example of the first: OpenAI accepts
+`input_text` under `developer` and `user`, and only `output_text` or `refusal`
+under `assistant`. So a message carries its role and its vocabulary as one
+value, and the wrong pairing does not compile.
 
 A third kind is the crate's own to avoid: **deciding a value the caller should
 decide.** Every value the API accepts is settable here, in both directions, and
@@ -42,6 +45,7 @@ use openai::model::Model;
 use openai::prefix::PrefixSettings;
 use openai::request::Request;
 use openai::tools::{AllowedToolsMode, FunctionTool, ToolChoice};
+use openai::values::AssistantPhase;
 use openai::{API_BASE, HEADER_AUTHORIZATION, RESPONSES_PATH};
 use serde_json::json;
 
@@ -55,6 +59,11 @@ let mut context = Context::new(vec![
 // `instructions` cannot carry a breakpoint. The slot is anchored: never moved.
 context.push_anchored_developer_text(BreakpointSlot::S0, "Stable instructions…")?;
 context.push_user_text("What changed in this file?");
+
+// A replayed model turn takes the *output* vocabulary, because that is what
+// OpenAI accepts under `assistant`. Its phase is required, not optional.
+context.push_assistant_text(AssistantPhase::FinalAnswer, "It gained a main function.");
+context.push_user_text("And now?");
 
 let prefix = PrefixSettings::new(Model::gpt_5_6_sol());
 let request = Request::new(&context, prefix)?
@@ -78,6 +87,9 @@ reqwest::Client::new()
 
 | Mistake | What stops it |
 | --- | --- |
+| An assistant message spelling its text `input_text` | `Message::Assistant` holds `OutputBlock`, which has no such variant, and `InputRole` has no `Assistant` |
+| A `developer` or `user` message spelling its text `output_text` | `Message::Input` holds `InputBlock`, which has no such variant |
+| A cache breakpoint on a refusal | `Refusal` has no breakpoint field; the API answers `Unknown parameter` to one |
 | `max` effort on a model that refuses it | `EffortNoneToMax` and `EffortNoneToXhigh` are different types |
 | `prompt_cache_options` and `prompt_cache_retention` together | one `match` on the model produces exactly one of them |
 | A fifth cache breakpoint | `BreakpointSlot` has four variants |
@@ -147,6 +159,20 @@ know, so silence is the only honest rendering.
 
 An enclosing object vanishes when every field inside is absent. An empty
 `"reasoning": {}` is a different request from no `reasoning`.
+
+## What each role may say
+
+Read off the reference and confirmed live in both directions — each wrong
+pairing is answered with the other set enumerated in the error.
+
+| role | Rust type | blocks the API accepts |
+| --- | --- | --- |
+| `developer`, `user` | `Message::Input { role: InputRole, content: Vec<InputBlock> }` | `input_text`, `input_image`, `input_file`, `scoped_content`, `input_audio` |
+| `assistant` | `Message::Assistant { phase, content: Vec<OutputBlock> }` | `output_text`, `refusal` |
+
+`InputBlock` models `input_text` and `input_image`; `OutputBlock` models both
+output kinds. A function result holds `InputBlock`s, because a tool result is
+content the model reads.
 
 ## Modeled
 

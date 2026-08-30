@@ -5,6 +5,114 @@ All notable changes to this crate are documented here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.4.0] — 2026-08-30
+
+The role decides the content vocabulary, so the wrong pairing does not compile.
+
+**The defect.** The crate spelled an assistant message's text
+`{"type": "input_text", …}`. OpenAI accepts only `output_text` or `refusal`
+inside assistant content, so every request carrying an assistant turn — nearly
+every real conversation — was refused:
+
+```text
+Invalid value: 'input_text'. Supported values are: 'output_text' and 'refusal'.
+  param: input[1].content[0]
+```
+
+Reproduced live and isolated to that one field: the same body with `output_text`
+in its place returned 200 and the model's answer.
+
+The tests missed it because they only ever serialized. Every assertion asked
+whether the crate wrote what the crate writes, and the crate agreed with itself.
+
+**Why it happened, and what was wrong with it structurally.** One shared
+`ContentBlock` type served two roles that accept different vocabularies, and
+`Role` carried `Assistant` beside `Developer` and `User` as if all three took the
+same content. A `match` on the role at serialization time would have fixed the
+bytes and left the wrong pairing writable, so the fix is that the role and its
+vocabulary are one value.
+
+The vocabularies, read off the reference and confirmed live in both directions —
+each wrong pairing is answered with the other set enumerated:
+
+| role | blocks the API accepts |
+| --- | --- |
+| `developer`, `user` | `input_text`, `input_image`, `input_file`, `scoped_content`, `input_audio` |
+| `assistant` | `output_text`, `refusal` |
+
+### Changed — breaking
+
+- `Message` is now an enum over the two vocabularies rather than a struct with a
+  `role` field:
+
+  ```rust
+  Message::Input { role: InputRole, content: Vec<InputBlock> }
+  Message::Assistant { phase: AssistantPhase, content: Vec<OutputBlock> }
+  ```
+
+  `phase` is a plain field on the assistant variant, not an `Option` on a shared
+  struct: where it exists it always means something, and where it does not it is
+  not a field.
+
+- `ContentBlock` is split into `InputBlock` (`input_text`, `input_image`) and
+  `OutputBlock` (`output_text`, `refusal`). **Migration:**
+  `ContentBlock::text` becomes `InputBlock::text` in a developer, user, or
+  tool-result position, and `OutputBlock::text` in an assistant one;
+  `ContentBlock::image` becomes `InputBlock::image`.
+
+- `Role` becomes `InputRole` and loses its `Assistant` variant. An assistant
+  role beside an input block is now a value that does not exist. **Migration:**
+  `Role::Developer` and `Role::User` become `InputRole::*`; `Role::Assistant`
+  has no replacement, because `Message::Assistant` is what it meant.
+
+- `Context::push_assistant` takes `Vec<OutputBlock>`;
+  `push_developer`, `push_user` and `push_function_call_output_blocks` take
+  `Vec<InputBlock>`. A tool result holds *input* blocks, because it is content
+  the model reads.
+
+### Added
+
+- `refusal` is now a thing a replayed assistant turn can hold, through
+  `OutputBlock::refusal` and `Context::push_assistant_refusal`. It was the other
+  half of the vocabulary the API documents there, and was previously
+  unrepresentable — a real conversation containing one could not be replayed at
+  all.
+
+  A `Refusal` carries no `prompt_cache_breakpoint` field, because the API
+  answers `Unknown parameter:
+  'input[0].content[0].prompt_cache_breakpoint'` to one. Marking a breakpoint
+  therefore skips it and lands on the nearest legal block, which the slot
+  bookkeeping does without a special case: `BreakpointableBlock::breakpoint_site`
+  returns `None`, and a block with no site is not a place a breakpoint goes.
+
+- `Context::push_input`, for choosing between the two input roles at runtime.
+
+- `tests/role_content_vocabulary.rs`, the test that would have caught this. It
+  transcribes each role's documented vocabulary and walks every content block of
+  a rendered body against it, so it fails when the crate and the reference
+  disagree rather than when the crate changes.
+
+- `examples/print_two_turn_body.rs`, which prints the crate's own bytes for a
+  two-turn conversation. It exists so a live check posts what the crate builds
+  rather than an imitation of it.
+
+### Measured live
+
+Against `gpt-5.6-sol`, one field apart, on the crate's own rendered body:
+
+| assistant content | result |
+| --- | --- |
+| `{"type": "input_text", "text": "blue"}` | HTTP 400, `Invalid value: 'input_text'` |
+| `{"type": "output_text", "text": "blue"}` | HTTP 200, `completed`, 26 input / 5 output tokens |
+
+And in the other direction, `output_text` under `user`:
+`Invalid value: 'output_text'. Supported values are: 'input_text',
+'input_image', 'input_file', 'scoped_content', and 'input_audio'.`
+
+A breakpoint on assistant `output_text` is real, not merely accepted: it wrote
+3,603 tokens and read the same 3,603 back on the next request. On a `refusal` the
+same field is rejected outright, which is why the type does not have it.
+
 ## [0.3.0] — 2026-08-29
 
 The caller chooses every value, and the crate invents none.
