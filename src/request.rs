@@ -16,7 +16,9 @@ use crate::context::{CACHE_WRITE_SLOTS, Context};
 use crate::model::{Gpt5_6, Model};
 use crate::prefix::{PrefixSettings, TextFormat};
 use crate::tools::{FunctionTool, ToolChoice};
-use crate::values::{CacheMode, ReasoningEffort, ReasoningSummary, Verbosity};
+use crate::values::{
+    CacheMode, Include, Metadata, ReasoningEffort, ReasoningSummary, ServiceTier, Truncation, Verbosity,
+};
 use serde::Serialize;
 use serde_json::Value;
 
@@ -132,6 +134,38 @@ impl std::fmt::Display for RequestError {
 
 impl std::error::Error for RequestError {}
 
+// ── Transport ────────────────────────────────────────────────────────────────
+
+/// How the response comes back, with the options that only that way accepts.
+///
+/// The API pairs `stream` with `stream_options` and refuses the second without
+/// the first — measured live, *"The 'stream_options' parameter is only allowed
+/// when 'stream' is enabled."* Two independent fields would let a caller write
+/// exactly that 400; one sum type makes the pairing the only shape there is.
+///
+/// This is also the whole difference between the two ways of reading an answer.
+/// A buffered request answers with one response body; a streamed one answers
+/// with the events [`Settling`](crate::settle::Settling) accumulates. The
+/// request body is otherwise identical, which is why this is a field rather than
+/// two request types.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum Transport {
+    /// The whole response in one body. `stream` is emitted as `false`.
+    #[default]
+    Buffered,
+    /// Server-sent events. `stream` is emitted as `true`.
+    Streamed {
+        /// Whether deltas carry `obfuscation` padding, which normalizes payload
+        /// sizes so a packet length cannot reveal a token length.
+        ///
+        /// `None` sends no `stream_options` at all and leaves OpenAI's default,
+        /// which is to include the padding. `Some` states the choice, and
+        /// `Some(false)` trades the mitigation for bandwidth — sound only over
+        /// links the caller trusts.
+        include_obfuscation: Option<bool>,
+    },
+}
+
 /// A borrowed [`Context`] plus per-call settings. Serializes to the
 /// `POST /v1/responses` body.
 ///
@@ -155,10 +189,14 @@ pub struct Request<'a> {
     /// Upper bound on generated tokens, reasoning included. `None` leaves the
     /// model free up to the context window.
     pub max_output_tokens: Option<u32>,
-    /// Whether to stream the response as server-sent events. The body is
-    /// otherwise identical, which is why streaming is a flag here rather than a
-    /// second request type.
-    pub stream: bool,
+    /// How the response comes back, and — inseparably — what the stream carries.
+    ///
+    /// One field rather than `stream` beside `stream_options`, because the API
+    /// refuses the second without the first: measured live,
+    /// `"stream_options" without "stream": true` answers *"The 'stream_options'
+    /// parameter is only allowed when 'stream' is enabled."* A sum type makes
+    /// that pairing the only one expressible, so the 400 is not a value.
+    pub transport: Transport,
     /// Whether OpenAI stores the response for later retrieval.
     ///
     /// Always sent, carrying OpenAI's documented behavior: responses are "saved
@@ -174,6 +212,56 @@ pub struct Request<'a> {
     /// Per-request instructions that will not be cached. For reusable ones, use
     /// a developer message instead; see [`UncacheableInstructions`].
     pub instructions: Option<UncacheableInstructions>,
+    /// Extra output to send back that the response otherwise omits.
+    ///
+    /// Empty by default and then absent from the body, because every entry asks
+    /// for something extra and the API asks for nothing extra by default. One
+    /// entry is load-bearing rather than diagnostic:
+    /// [`Include::ReasoningEncryptedContent`] is what makes a reasoning item
+    /// replayable in stateless mode, so without it a reasoning model loses its
+    /// own train of thought across a tool call.
+    ///
+    /// A `Vec` rather than a set because the API takes an array; duplicates are
+    /// the caller's to avoid, and [`Self::including`] does not introduce them.
+    pub include: Vec<Include>,
+    /// Which processing pool serves the request. `None` leaves OpenAI's
+    /// documented `auto` behavior — the project's configured tier — unstated,
+    /// because "the project decides" and "I chose auto" are the same request
+    /// and the crate does not name a value the caller did not.
+    pub service_tier: Option<ServiceTier>,
+    /// The caller's own key-value pairs, stored on the response and queryable
+    /// later. Absent when empty: `{}` and no field say the same thing here, and
+    /// the shorter one is what "no metadata" means.
+    pub metadata: Option<Metadata>,
+    /// A stable pseudonymous identifier for the end user, so OpenAI can detect
+    /// abuse without the caller sending anything identifying. Hash a username or
+    /// an email; do not send the address itself.
+    ///
+    /// Distinct from [`Self::prompt_cache_key`] on purpose: this one is for
+    /// safety attribution and that one is for cache routing. The older `user`
+    /// field, which conflated the two, is deliberately not modeled — the
+    /// reference names it replaced by exactly these two.
+    pub safety_identifier: Option<String>,
+    /// What to do when the input exceeds the context window.
+    ///
+    /// `None` leaves the documented default, `disabled`, which fails the request
+    /// with a 400. [`Truncation::Auto`] drops items from the front of the
+    /// conversation instead — which is a prefix change by definition, so the
+    /// turn that first truncates pays to write the whole prefix again.
+    pub truncation: Option<Truncation>,
+    /// A cap on how many built-in tool calls one response may make, across all
+    /// hosted tools rather than per tool. Further calls are ignored rather than
+    /// erroring. No effect on function tools, which the model calls through the
+    /// caller.
+    pub max_tool_calls: Option<u32>,
+    /// Whether OpenAI generates the response asynchronously, so the caller polls
+    /// or reconnects rather than holding a socket open for the whole answer.
+    ///
+    /// Always emitted, carrying the `false` every response object reports, so
+    /// the body records which transport the caller chose. Background mode needs
+    /// [`Self::store`] to stay true: a response nobody stored is one nobody can
+    /// come back for.
+    pub background: bool,
 }
 
 impl<'a> Request<'a> {
@@ -197,9 +285,16 @@ impl<'a> Request<'a> {
             tool_choice: ToolChoice::default(),
             prompt_cache_key: None,
             max_output_tokens: None,
-            stream: false,
+            transport: Transport::Buffered,
             store: true,
             instructions: None,
+            include: Vec::new(),
+            service_tier: None,
+            metadata: None,
+            safety_identifier: None,
+            truncation: None,
+            max_tool_calls: None,
+            background: false,
         })
     }
 
@@ -229,16 +324,36 @@ impl<'a> Request<'a> {
         self
     }
 
-    /// Stream the response as server-sent events.
+    /// Stream the response as server-sent events, saying nothing about
+    /// obfuscation and so leaving OpenAI's default of including it.
     pub fn streaming(mut self) -> Self {
-        self.stream = true;
+        self.transport = Transport::Streamed { include_obfuscation: None };
+        self
+    }
+
+    /// Stream, and state whether the deltas carry `obfuscation` padding.
+    ///
+    /// `false` trades a side-channel mitigation for bandwidth: the padding
+    /// normalizes payload sizes so a packet length cannot reveal a token length.
+    /// Sound only over links the caller trusts.
+    pub fn streaming_with_obfuscation(mut self, include_obfuscation: bool) -> Self {
+        self.transport = Transport::Streamed { include_obfuscation: Some(include_obfuscation) };
         self
     }
 
     /// Return the whole response in one body rather than streaming it.
     pub fn without_streaming(mut self) -> Self {
-        self.stream = false;
+        self.transport = Transport::Buffered;
         self
+    }
+
+    /// Whether this request asks for a stream.
+    ///
+    /// A reader, not a setter: the transport is a sum type because the stream
+    /// and its options are one decision, and this answers the one question a
+    /// caller asks of it without letting the pair come apart.
+    pub fn is_streaming(&self) -> bool {
+        matches!(self.transport, Transport::Streamed { .. })
     }
 
     /// Ask OpenAI not to store the response. Reasoning items then arrive with
@@ -259,6 +374,109 @@ impl<'a> Request<'a> {
     /// prefix — a timestamp, a user's name.
     pub fn with_instructions(mut self, instructions: UncacheableInstructions) -> Self {
         self.instructions = Some(instructions);
+        self
+    }
+
+    /// Ask for one extra piece of output, unless it was already asked for.
+    ///
+    /// Idempotent because the API takes an array and a repeated entry is a
+    /// duplicate on the wire rather than an emphasis. The counterpart is
+    /// [`Self::excluding`].
+    pub fn including(mut self, include: Include) -> Self {
+        if !self.include.contains(&include) {
+            self.include.push(include);
+        }
+        self
+    }
+
+    /// Stop asking for one extra piece of output.
+    pub fn excluding(mut self, include: Include) -> Self {
+        self.include.retain(|held| *held != include);
+        self
+    }
+
+    /// Ask for the reasoning payload that makes a reasoning item replayable.
+    ///
+    /// Named for what it buys rather than for the wire string it sets, because
+    /// this is the one `include` entry a stateless multi-turn caller needs: pair
+    /// it with [`Context::push_reasoning`](crate::context::Context::push_reasoning)
+    /// and the model keeps its own train of thought across a tool call.
+    pub fn with_replayable_reasoning(self) -> Self {
+        self.including(Include::ReasoningEncryptedContent)
+    }
+
+    /// Choose the processing pool.
+    pub fn with_service_tier(mut self, service_tier: ServiceTier) -> Self {
+        self.service_tier = Some(service_tier);
+        self
+    }
+
+    /// Leave the pool to the project's configuration, sending no `service_tier`.
+    pub fn without_service_tier(mut self) -> Self {
+        self.service_tier = None;
+        self
+    }
+
+    /// Attach the caller's own key-value pairs. An empty map is no metadata, so
+    /// it is stored as absence rather than as `{}`.
+    pub fn with_metadata(mut self, metadata: Metadata) -> Self {
+        self.metadata = (!metadata.is_empty()).then_some(metadata);
+        self
+    }
+
+    /// Send no metadata.
+    pub fn without_metadata(mut self) -> Self {
+        self.metadata = None;
+        self
+    }
+
+    /// Attribute the request to a pseudonymous end user. Hash the real
+    /// identifier before calling this.
+    pub fn with_safety_identifier(mut self, identifier: impl Into<String>) -> Self {
+        self.safety_identifier = Some(identifier.into());
+        self
+    }
+
+    /// Send no safety identifier.
+    pub fn without_safety_identifier(mut self) -> Self {
+        self.safety_identifier = None;
+        self
+    }
+
+    /// Choose what an over-long input does.
+    pub fn with_truncation(mut self, truncation: Truncation) -> Self {
+        self.truncation = Some(truncation);
+        self
+    }
+
+    /// Leave the documented default, which fails an over-long input outright.
+    pub fn without_truncation(mut self) -> Self {
+        self.truncation = None;
+        self
+    }
+
+    /// Cap how many hosted-tool calls one response may make.
+    pub fn with_max_tool_calls(mut self, max_tool_calls: u32) -> Self {
+        self.max_tool_calls = Some(max_tool_calls);
+        self
+    }
+
+    /// Lift the hosted-tool call cap.
+    pub fn without_max_tool_calls(mut self) -> Self {
+        self.max_tool_calls = None;
+        self
+    }
+
+    /// Generate the response asynchronously, so it is polled for rather than
+    /// waited on. Needs [`Self::store`] left true to be retrievable.
+    pub fn in_background(mut self) -> Self {
+        self.background = true;
+        self
+    }
+
+    /// Generate the response on this request, the documented behavior.
+    pub fn in_foreground(mut self) -> Self {
+        self.background = false;
         self
     }
 
@@ -343,6 +561,14 @@ struct CompactionWire {
     compact_threshold: Option<u32>,
 }
 
+/// `stream_options`, whose single field is independently present or absent, so
+/// the object vanishes when it is: an empty `"stream_options": {}` says nothing
+/// that no `stream_options` does not already say.
+#[derive(Serialize)]
+struct StreamOptionsWire {
+    include_obfuscation: bool,
+}
+
 #[derive(Serialize)]
 struct RequestWire<'a> {
     model: &'static str,
@@ -370,8 +596,23 @@ struct RequestWire<'a> {
     context_management: Option<[CompactionWire; 1]>,
     #[serde(skip_serializing_if = "Option::is_none")]
     max_output_tokens: Option<u32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    include: Option<&'a [Include]>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    service_tier: Option<ServiceTier>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    metadata: Option<&'a Metadata>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    safety_identifier: Option<&'a str>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    truncation: Option<Truncation>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    max_tool_calls: Option<u32>,
     stream: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    stream_options: Option<StreamOptionsWire>,
     store: bool,
+    background: bool,
 }
 
 impl Serialize for Request<'_> {
@@ -429,8 +670,21 @@ impl Serialize for Request<'_> {
                 .context_management
                 .map(|c| [CompactionWire { kind: "compaction", compact_threshold: c.compact_threshold }]),
             max_output_tokens: self.max_output_tokens,
-            stream: self.stream,
+            include: (!self.include.is_empty()).then_some(&self.include),
+            service_tier: self.service_tier,
+            metadata: self.metadata.as_ref(),
+            safety_identifier: self.safety_identifier.as_deref(),
+            truncation: self.truncation,
+            max_tool_calls: self.max_tool_calls,
+            stream: self.is_streaming(),
+            stream_options: match self.transport {
+                Transport::Streamed { include_obfuscation: Some(include_obfuscation) } => {
+                    Some(StreamOptionsWire { include_obfuscation })
+                }
+                Transport::Streamed { include_obfuscation: None } | Transport::Buffered => None,
+            },
             store: self.store,
+            background: self.background,
         }
         .serialize(s)
     }
@@ -466,9 +720,10 @@ mod tests {
     /// `text.format` "the default format is `{\"type\": \"text\"}`",
     /// `text.verbosity` "the default is `medium`", `reasoning.context` "if
     /// omitted or set to `auto`, the model determines", `prompt_cache_options`
-    /// "defaults to `implicit`" / "defaults to `30m`". Nothing else appears,
-    /// because nothing else has one — and if a field drifts into or out of this
-    /// literal, this test names it.
+    /// "defaults to `implicit`" / "defaults to `30m`", `background` typed
+    /// non-null `false` on the response object and confirmed live. Nothing else
+    /// appears, because nothing else has one — and if a field drifts into or out
+    /// of this literal, this test names it.
     #[test]
     fn a_default_gpt_5_6_body_is_exactly_this() {
         let mut context = Context::new(vec![]);
@@ -485,6 +740,7 @@ mod tests {
                 "prompt_cache_options": {"mode": "implicit", "ttl": "30m"},
                 "stream": false,
                 "store": true,
+                "background": false,
             })
         );
     }
@@ -510,6 +766,7 @@ mod tests {
                 "tool_choice": "auto",
                 "stream": false,
                 "store": true,
+                "background": false,
             })
         );
     }
@@ -906,5 +1163,108 @@ mod tests {
             assert_eq!(body(&context, PrefixSettings::new(model))["model"], id);
         }
         assert_eq!(Gpt5_6::new(Gpt5_6Tier::Luna).tier, Gpt5_6Tier::Luna);
+    }
+
+    /// `stream_options` reaches the wire only alongside `stream: true`, because
+    /// the sum type admits no other pairing.
+    ///
+    /// The API's own words, measured live against the endpoint: *"The
+    /// 'stream_options' parameter is only allowed when 'stream' is enabled."*
+    /// With `stream` and `stream_options` as two independent fields, that 400
+    /// was one line of caller code away.
+    #[test]
+    fn stream_options_cannot_be_sent_without_stream() {
+        let context = Context::new(vec![]);
+        let prefix = || PrefixSettings::new(Model::gpt_5_6_sol());
+        let of = |request: Request<'_>| serde_json::to_value(&request).unwrap();
+
+        let buffered = of(Request::new(&context, prefix()).unwrap());
+        assert_eq!(buffered["stream"], false);
+        assert!(buffered.get("stream_options").is_none(), "{buffered}");
+
+        // Streaming without an obfuscation choice sends no options object: `{}`
+        // would state a preference the caller never expressed.
+        let streamed = of(Request::new(&context, prefix()).unwrap().streaming());
+        assert_eq!(streamed["stream"], true);
+        assert!(streamed.get("stream_options").is_none(), "{streamed}");
+
+        let chosen = of(Request::new(&context, prefix()).unwrap().streaming_with_obfuscation(false));
+        assert_eq!(chosen["stream"], true);
+        assert_eq!(chosen["stream_options"], json!({"include_obfuscation": false}));
+
+        // And back off the wire, which is the counterpart every setter has.
+        let reverted =
+            of(Request::new(&context, prefix()).unwrap().streaming_with_obfuscation(false).without_streaming());
+        assert_eq!(reverted["stream"], false);
+        assert!(reverted.get("stream_options").is_none(), "{reverted}");
+    }
+
+    /// The response-shaping fields are absent until asked for, and every one of
+    /// them can be taken back off the wire.
+    #[test]
+    fn each_per_call_field_goes_on_and_comes_off_the_wire() {
+        let context = Context::new(vec![]);
+        let prefix = || PrefixSettings::new(Model::gpt_5_6_sol());
+        let bare = body(&context, prefix());
+        for field in
+            ["include", "service_tier", "metadata", "safety_identifier", "truncation", "max_tool_calls", "instructions"]
+        {
+            assert!(bare.get(field).is_none(), "{field} was sent unasked: {bare}");
+        }
+
+        let metadata = Metadata::new([("thread", "42")]).unwrap();
+        let asked = Request::new(&context, prefix())
+            .unwrap()
+            .with_replayable_reasoning()
+            .with_service_tier(ServiceTier::Flex)
+            .with_metadata(metadata)
+            .with_safety_identifier("sha256:abc")
+            .with_truncation(Truncation::Auto)
+            .with_max_tool_calls(3)
+            .in_background();
+        let value = serde_json::to_value(&asked).unwrap();
+        assert_eq!(value["include"], json!(["reasoning.encrypted_content"]));
+        assert_eq!(value["service_tier"], "flex");
+        assert_eq!(value["metadata"], json!({"thread": "42"}));
+        assert_eq!(value["safety_identifier"], "sha256:abc");
+        assert_eq!(value["truncation"], "auto");
+        assert_eq!(value["max_tool_calls"], 3);
+        assert_eq!(value["background"], true);
+
+        let taken_back = asked
+            .excluding(Include::ReasoningEncryptedContent)
+            .without_service_tier()
+            .without_metadata()
+            .without_safety_identifier()
+            .without_truncation()
+            .without_max_tool_calls()
+            .in_foreground();
+        assert_eq!(serde_json::to_value(&taken_back).unwrap(), bare);
+    }
+
+    /// `include` is an array, so asking twice must not send twice: a duplicate
+    /// entry is a duplicate on the wire, and the wire is the prefix.
+    #[test]
+    fn asking_for_the_same_extra_output_twice_sends_it_once() {
+        let context = Context::new(vec![]);
+        let request = Request::new(&context, PrefixSettings::new(Model::gpt_5_6_sol()))
+            .unwrap()
+            .with_replayable_reasoning()
+            .including(Include::ReasoningEncryptedContent)
+            .including(Include::FileSearchCallResults);
+        assert_eq!(
+            serde_json::to_value(&request).unwrap()["include"],
+            json!(["reasoning.encrypted_content", "file_search_call.results"])
+        );
+    }
+
+    /// An empty metadata map is no metadata, not `{}`.
+    #[test]
+    fn empty_metadata_is_absence() {
+        let context = Context::new(vec![]);
+        let request = Request::new(&context, PrefixSettings::new(Model::gpt_5_6_sol()))
+            .unwrap()
+            .with_metadata(Metadata::new(Vec::<(String, String)>::new()).unwrap());
+        assert!(serde_json::to_value(&request).unwrap().get("metadata").is_none());
     }
 }

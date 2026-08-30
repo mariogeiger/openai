@@ -89,6 +89,7 @@ fn the_first_turn_of_a_thread_is_exactly_this_body() {
             "max_output_tokens": 8_192,
             "stream": false,
             "store": true,
+            "background": false,
         })
     );
 }

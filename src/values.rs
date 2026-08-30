@@ -218,6 +218,87 @@ api_enum! {
     }
 }
 
+api_enum! {
+    /// One entry of `include`: extra output the response omits unless asked for.
+    ///
+    /// Every variant names data the model produced anyway. The field decides
+    /// whether it comes back, and one of these is load-bearing rather than
+    /// diagnostic: without [`Self::ReasoningEncryptedContent`] a stateless
+    /// caller has no reasoning item to replay, so a reasoning model loses its
+    /// own train of thought between a tool call and its result.
+    ///
+    /// `include` is not part of the hashed prefix — it selects what the
+    /// *response* carries, not what the model reads — so it lives on the
+    /// request and may vary per call.
+    Include {
+        /// The reasoning item's replayable opaque payload. Required to replay
+        /// reasoning with `store: false` or under Zero Data Retention; see
+        /// [`Context::push_reasoning`](crate::context::Context::push_reasoning),
+        /// which is what consumes it.
+        ReasoningEncryptedContent => "reasoning.encrypted_content",
+        /// The file-search tool call's search results.
+        FileSearchCallResults => "file_search_call.results",
+        /// The web-search tool call's results.
+        WebSearchCallResults => "web_search_call.results",
+        /// The sources behind the web-search tool call's action.
+        WebSearchCallActionSources => "web_search_call.action.sources",
+        /// Image URLs from an input message, echoed back.
+        MessageInputImageUrl => "message.input_image.image_url",
+        /// Image URLs from a computer-call output.
+        ComputerCallOutputImageUrl => "computer_call_output.output.image_url",
+        /// What the code interpreter's Python execution printed.
+        CodeInterpreterCallOutputs => "code_interpreter_call.outputs",
+        /// Per-token log probabilities on assistant messages.
+        ///
+        /// Reachable but not useful on the models this crate carries: they are
+        /// all reasoning models, and `top_logprobs` — which decides how many
+        /// alternatives each position reports — is refused by every one of them
+        /// with *"logprobs are not supported with reasoning models."* The entry
+        /// exists because the API accepts it and because a non-reasoning model
+        /// added later would need it.
+        MessageOutputTextLogprobs => "message.output_text.logprobs",
+    }
+}
+
+api_enum! { roundtrip
+    /// `service_tier`: which processing pool serves the request.
+    ///
+    /// A cost and latency choice, not a content one, so it is outside the
+    /// hashed prefix. Roundtrips because the response echoes the tier that
+    /// *actually* served the request, which may differ from the one asked for —
+    /// `fast` is answered as `priority`.
+    ServiceTier {
+        /// Whatever the project is configured for. The documented default.
+        Auto => "auto",
+        /// Standard pricing and performance.
+        Default => "default",
+        /// Flex processing: cheaper, slower, and it may be queued.
+        Flex => "flex",
+        /// Scale processing.
+        Scale => "scale",
+        /// Priority processing. Also what a `fast` request is reported as.
+        Priority => "priority",
+        /// Fast mode, reported back as [`Self::Priority`].
+        Fast => "fast",
+        /// Ultrafast processing, access-controlled and limited to some models.
+        Ultrafast => "ultrafast",
+    }
+}
+
+api_enum! {
+    /// `truncation`: what to do when the input exceeds the context window.
+    ///
+    /// Note which one is documented as the default. Dropping items from the
+    /// front is a prefix change by definition, so `Auto` and prompt caching are
+    /// in tension: the first turn that truncates rewrites the prefix.
+    Truncation {
+        /// Drop items from the beginning of the conversation to fit.
+        Auto => "auto",
+        /// Fail with a 400 instead. The documented default.
+        Disabled => "disabled",
+    }
+}
+
 api_enum! { roundtrip
     /// Why a response stopped short of a complete answer.
     IncompleteReason {
@@ -262,6 +343,125 @@ impl ErrorType {
             500..=599 => Self::ServerError,
             _ => return None,
         })
+    }
+}
+
+// ── Metadata ─────────────────────────────────────────────────────────────────
+
+/// `metadata`: the caller's own key-value pairs, echoed back on the response.
+///
+/// Three limits the reference states, and this type is the reason none of them
+/// can be exceeded silently: at most 16 pairs, keys at most 64 characters,
+/// values at most 512. The API answers a 400 to any of the three, so the
+/// checking constructor is the only way in and there are no public fields to
+/// assign around it.
+///
+/// Lengths are counted in characters, not bytes, because that is the unit the
+/// reference names.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct Metadata(std::collections::BTreeMap<String, String>);
+
+/// Which documented metadata limit a rejected map broke.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum MetadataError {
+    /// More than the 16 pairs the API accepts.
+    TooManyPairs {
+        /// How many were offered.
+        pairs: usize,
+    },
+    /// A key longer than 64 characters.
+    KeyTooLong {
+        /// The offending key.
+        key: String,
+        /// Its length in characters.
+        characters: usize,
+    },
+    /// A value longer than 512 characters.
+    ValueTooLong {
+        /// The key whose value was too long.
+        key: String,
+        /// The value's length in characters.
+        characters: usize,
+    },
+}
+
+impl std::fmt::Display for MetadataError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            MetadataError::TooManyPairs { pairs } => {
+                write!(f, "metadata holds {pairs} pairs; the API accepts at most {}", Metadata::MAX_PAIRS)
+            }
+            MetadataError::KeyTooLong { key, characters } => write!(
+                f,
+                "metadata key `{key}` is {characters} characters; the API accepts at most {}",
+                Metadata::MAX_KEY_CHARACTERS
+            ),
+            MetadataError::ValueTooLong { key, characters } => write!(
+                f,
+                "the metadata value at `{key}` is {characters} characters; the API accepts at most {}",
+                Metadata::MAX_VALUE_CHARACTERS
+            ),
+        }
+    }
+}
+
+impl std::error::Error for MetadataError {}
+
+impl Metadata {
+    /// The most pairs the API accepts.
+    pub const MAX_PAIRS: usize = 16;
+    /// The longest key the API accepts, in characters.
+    pub const MAX_KEY_CHARACTERS: usize = 64;
+    /// The longest value the API accepts, in characters.
+    pub const MAX_VALUE_CHARACTERS: usize = 512;
+
+    /// Every pair at once, checked against all three documented limits.
+    ///
+    /// Whole-map rather than one-pair-at-a-time because the pair count is a
+    /// property of the map: a builder that accepted a seventeenth pair and
+    /// failed later would have already let the invalid value exist.
+    pub fn new(pairs: impl IntoIterator<Item = (impl Into<String>, impl Into<String>)>) -> Result<Self, MetadataError> {
+        let mut map = std::collections::BTreeMap::new();
+        for (key, value) in pairs {
+            let (key, value) = (key.into(), value.into());
+            let characters = key.chars().count();
+            if characters > Self::MAX_KEY_CHARACTERS {
+                return Err(MetadataError::KeyTooLong { key, characters });
+            }
+            let characters = value.chars().count();
+            if characters > Self::MAX_VALUE_CHARACTERS {
+                return Err(MetadataError::ValueTooLong { key, characters });
+            }
+            map.insert(key, value);
+        }
+        if map.len() > Self::MAX_PAIRS {
+            return Err(MetadataError::TooManyPairs { pairs: map.len() });
+        }
+        Ok(Self(map))
+    }
+
+    /// The pairs, in key order. Sorted because the map is: two metadata values
+    /// built from the same pairs in different orders are the same value, and
+    /// serialize to the same bytes.
+    pub fn pairs(&self) -> impl Iterator<Item = (&str, &str)> {
+        self.0.iter().map(|(key, value)| (key.as_str(), value.as_str()))
+    }
+
+    /// How many pairs it holds.
+    pub fn len(&self) -> usize {
+        self.0.len()
+    }
+
+    /// Whether it holds none, in which case the field is omitted rather than
+    /// sent as `{}`.
+    pub fn is_empty(&self) -> bool {
+        self.0.is_empty()
+    }
+}
+
+impl serde::Serialize for Metadata {
+    fn serialize<S: serde::Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {
+        self.0.serialize(s)
     }
 }
 
@@ -312,5 +512,63 @@ mod tests {
         assert_eq!(ErrorType::from_status(503), Some(ErrorType::ServerError));
         assert_eq!(ErrorType::from_status(200), None);
         assert_eq!(ErrorType::from_status(302), None);
+    }
+
+    /// Each of the three documented metadata limits refuses, naming which one.
+    #[test]
+    fn metadata_refuses_what_the_api_refuses() {
+        let seventeen: Vec<(String, String)> = (0..17).map(|n| (format!("key{n}"), "v".to_owned())).collect();
+        assert_eq!(Metadata::new(seventeen), Err(MetadataError::TooManyPairs { pairs: 17 }));
+
+        let long_key = "k".repeat(65);
+        assert_eq!(
+            Metadata::new([(long_key.clone(), "v")]),
+            Err(MetadataError::KeyTooLong { key: long_key, characters: 65 })
+        );
+
+        assert_eq!(
+            Metadata::new([("k", "v".repeat(513))]),
+            Err(MetadataError::ValueTooLong { key: "k".to_owned(), characters: 513 })
+        );
+
+        // The boundaries themselves are accepted: the limits are inclusive.
+        assert!(Metadata::new([("k".repeat(64), "v".repeat(512))]).is_ok());
+        let sixteen: Vec<(String, String)> = (0..16).map(|n| (format!("key{n}"), "v".to_owned())).collect();
+        assert_eq!(Metadata::new(sixteen).unwrap().len(), 16);
+    }
+
+    /// Lengths count characters, not bytes, because that is the unit the
+    /// reference names — so a 64-character key of multi-byte characters is legal
+    /// even though it is 256 bytes.
+    #[test]
+    fn metadata_limits_count_characters_rather_than_bytes() {
+        let key = "\u{1f600}".repeat(64);
+        assert_eq!(key.len(), 256, "the key really is longer in bytes");
+        assert!(Metadata::new([(key, "v")]).is_ok());
+    }
+
+    /// Two maps built from the same pairs in different orders are one value and
+    /// serialize identically. Metadata is not part of the hashed prefix, but a
+    /// type whose bytes depend on insertion order invites the opposite habit.
+    #[test]
+    fn metadata_serializes_in_key_order() {
+        let forwards = Metadata::new([("a", "1"), ("b", "2")]).unwrap();
+        let backwards = Metadata::new([("b", "2"), ("a", "1")]).unwrap();
+        assert_eq!(forwards, backwards);
+        assert_eq!(serde_json::to_string(&forwards).unwrap(), r#"{"a":"1","b":"2"}"#);
+        assert_eq!(forwards.pairs().collect::<Vec<_>>(), vec![("a", "1"), ("b", "2")]);
+    }
+
+    /// A tier the response reports must read back as the variant that named it.
+    #[test]
+    fn the_service_tier_the_response_reports_reads_back() {
+        for tier in [ServiceTier::Auto, ServiceTier::Default, ServiceTier::Flex, ServiceTier::Ultrafast] {
+            assert_eq!(ServiceTier::from_str(tier.as_str()), Some(tier));
+        }
+        // Live: a request asking for `fast` is served and reported as
+        // `priority`, so both strings must decode.
+        assert_eq!(ServiceTier::from_str("fast"), Some(ServiceTier::Fast));
+        assert_eq!(ServiceTier::from_str("priority"), Some(ServiceTier::Priority));
+        assert_eq!(ServiceTier::from_str("turbo"), None);
     }
 }
