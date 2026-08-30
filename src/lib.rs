@@ -113,7 +113,22 @@
 //! [`StreamEvent`](stream::StreamEvent) is one frame, and
 //! [`Settling`](settle::Settling) accumulates a sequence of them.
 //!
-//! Two rules shape those types, both learned from what breaks in production:
+//! The 58 documented events are not 58 shapes. Most are one kind of thing
+//! parameterized by which stream it belongs to, so the variants are the kinds:
+//! [`TextDelta`](stream::StreamEvent::TextDelta) carries a
+//! [`TextStream`](stream::TextStream) saying whether the text is the answer, a
+//! refusal, or reasoning; all 18 hosted-tool lifecycle notices are one
+//! [`HostedToolLifecycle`](stream::StreamEvent::HostedToolLifecycle) carrying a
+//! tool and a phase. The factoring is checked both ways — every documented event
+//! decodes, and every decoded event names its own wire type back.
+//!
+//! Keeping the text streams apart is not cosmetic: a refusal concatenated into
+//! the answer *reads* as the answer. So
+//! [`Settled::text`](settled::Settled::text) is answer text only, and
+//! [`Settled::refusal`](settled::Settled::refusal) is its own field.
+//!
+//! Two more rules shape those types, both learned from what breaks in
+//! production:
 //!
 //! * **A new event type is not an error.** OpenAI's compatibility promise names
 //!   "adding new event types in streaming APIs" as backwards-compatible, so a
@@ -123,12 +138,13 @@
 //! * **An unfinished stream is a different type from a finished one.** A
 //!   dropped connection leaves text that looks exactly like a complete answer.
 //!   So [`Settling`](settle::Settling) has no method returning a response, and
-//!   [`Settled`](settle::Settled) is reachable only through
+//!   [`Settled`](settled::Settled) is reachable only through
 //!   [`Settling::settle`](settle::Settling::settle), which fails on a stream
 //!   that never sent a terminal event.
 //!
 //! ```
-//! use openai::settle::{Outcome, Settling};
+//! use openai::settle::Settling;
+//! use openai::settled::Outcome;
 //!
 //! let mut settling = Settling::new();
 //! for frame in [
@@ -155,19 +171,25 @@
 //! caller supplies every input item, lets the caller control the rendered
 //! prefix byte for byte.
 //!
-//! Of the streaming events, the seven a text-and-tools consumer needs are
-//! modeled and the rest read as
-//! [`Unmodeled`](stream::StreamEvent::Unmodeled) — see the crate's
-//! `CHANGELOG.md` for the full list and the reason for each omission.
+//! Of the 58 documented streaming events, 53 are modeled. The five that are not
+//! are the shell-call family, whose payload is a structured command list a caller
+//! running commands has to agree with exactly; they read as
+//! [`Unmodeled`](stream::StreamEvent::Unmodeled), and a shell call's lifecycle
+//! still arrives through the output-item events.
 
 #![deny(missing_docs)]
 
+mod body;
 pub mod content;
 pub mod context;
+mod decode;
+pub mod hosted;
+pub mod items;
 pub mod model;
 pub mod prefix;
 pub mod request;
 pub mod settle;
+pub mod settled;
 pub mod stream;
 pub mod tools;
 pub mod usage;
