@@ -12,7 +12,10 @@
 macro_rules! api_enum {
     (@base $(#[$outer:meta])* $name:ident { $($(#[$inner:meta])* $variant:ident => $s:literal),* $(,)? }) => {
         $(#[$outer])*
-        #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+        // `Ord` as well as `Eq`: these are keys as often as they are values —
+        // a count per tool, a set of includes — and a total order that follows
+        // declaration order is both free and stable.
+        #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
         pub enum $name { $($(#[$inner])* $variant),* }
         impl $name {
             /// The exact string this variant serializes to.
@@ -296,6 +299,73 @@ api_enum! {
         Auto => "auto",
         /// Fail with a 400 instead. The documented default.
         Disabled => "disabled",
+    }
+}
+
+api_enum! { roundtrip
+    /// `status` on a response object: where generation got to.
+    ///
+    /// Six values, and only three of them ever arrive on a streamed terminal
+    /// event. `Queued` and `InProgress` name a response still being generated —
+    /// reachable through background mode or a retrieval — and `Cancelled` names
+    /// one a caller stopped. Roundtrips because it is read, never sent.
+    ResponseStatus {
+        /// The model answered.
+        Completed => "completed",
+        /// Generation failed; `error` says why.
+        Failed => "failed",
+        /// Still generating.
+        InProgress => "in_progress",
+        /// A caller cancelled it.
+        Cancelled => "cancelled",
+        /// Accepted and waiting for capacity. Reached under `background` or a
+        /// queued service tier.
+        Queued => "queued",
+        /// Stopped short; `incomplete_details.reason` says why.
+        Incomplete => "incomplete",
+    }
+}
+
+api_enum! { roundtrip
+    /// Which built-in tool a hosted-tool streaming event belongs to.
+    ///
+    /// The Responses API streams 26 events for hosted tools, and they are one
+    /// family name crossed with a handful of lifecycle phases rather than 26
+    /// unrelated shapes. Naming the family separately from the phase — see
+    /// [`HostedToolPhase`](crate::hosted::HostedToolPhase) — is what collapses
+    /// them into one variant a consumer can match once, and it is what makes a
+    /// tool OpenAI adds next year one more variant here instead of a decoder
+    /// change.
+    ///
+    /// Every one of these tools runs on OpenAI's side. This crate does not build
+    /// the tool definitions that turn them on — see `SOUL.md` — but it decodes
+    /// their events, because a consumer that enabled one through a hand-written
+    /// tool array still has to read what comes back.
+    HostedTool {
+        /// `file_search`, over vector stores.
+        FileSearch => "file_search",
+        /// `web_search`.
+        WebSearch => "web_search",
+        /// `code_interpreter`, running Python in a container.
+        CodeInterpreter => "code_interpreter",
+        /// `image_generation`.
+        ImageGeneration => "image_generation",
+        /// An MCP server's tool call.
+        Mcp => "mcp",
+        /// An MCP server's tool listing, which precedes any call to it.
+        McpListTools => "mcp_list_tools",
+        /// `shell`, running commands.
+        Shell => "shell",
+        /// `local_shell`, whose commands the caller runs.
+        LocalShell => "local_shell",
+        /// `computer_use_preview`.
+        Computer => "computer",
+        /// `apply_patch`, editing files.
+        ApplyPatch => "apply_patch",
+        /// A custom tool, whose input is free text rather than JSON.
+        Custom => "custom",
+        /// `tool_search`, which finds other tools.
+        ToolSearch => "tool_search",
     }
 }
 

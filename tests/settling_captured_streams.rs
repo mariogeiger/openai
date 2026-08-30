@@ -6,8 +6,10 @@
 //! prove the crate is usable without reaching inside it.
 
 use openai::content::{FunctionCall, InputItem};
-use openai::settle::{Outcome, SettleError, Settled, Settling};
-use openai::stream::{OutputItem, data_payload};
+use openai::items::OutputItem;
+use openai::settle::{SettleError, Settling};
+use openai::settled::{Outcome, Settled};
+use openai::stream::data_payload;
 use openai::values::IncompleteReason;
 use serde_json::json;
 
@@ -262,4 +264,91 @@ fn a_truncated_stream_never_settles() {
     };
     assert_eq!(events, 21, "every frame before response.completed was consumed");
     assert_eq!(text_len, 22, "and the text it had is reported, not returned");
+}
+
+// ── Whole bodies captured from the live endpoint ──────────────────────────────
+
+/// A body captured from `POST https://inference-api.nvidia.com/v1/responses`
+/// with model `openai/openai/gpt-5.6-sol` on 2026-08-30, asking one question
+/// answered in prose. 25 `data:` frames, the `[DONE]` sentinel included.
+const CAPTURED_TEXT: &str = include_str!("data/captured_text_stream.sse");
+
+/// The same endpoint and model, asked to call a `get_weather` function twice.
+/// Carries a reasoning item with `encrypted_content`, two function calls, and
+/// the `response.function_call_arguments.*` frames — 14 `data:` frames.
+const CAPTURED_TOOL_CALLS: &str = include_str!("data/captured_tool_call_stream.sse");
+
+/// Reads a captured body, whose last `data:` line is the `[DONE]` sentinel that
+/// is not JSON and is not an event.
+///
+/// The sentinel is the transport's end-of-stream marker, so skipping it is the
+/// transport's job — which is precisely why this crate does not decode it, and
+/// why this helper exists in the test rather than in the crate.
+fn read_captured(body: &str) -> Result<Settled, SettleError> {
+    let mut settling = Settling::new();
+    for line in body.lines() {
+        match data_payload(line) {
+            Some("[DONE]") | None => {}
+            Some(payload) => {
+                settling.consume_payload(payload)?;
+            }
+        }
+    }
+    settling.settle()
+}
+
+/// A real prose answer settles, with its text whole and its usage read.
+///
+/// Every frame of a real body, including the `response.content_part.*` and
+/// `response.output_text.done` frames the crate models as of this release — and
+/// the `model` field the gateway adds to every frame, which must be ignored
+/// rather than refused.
+#[test]
+fn a_captured_prose_answer_settles() {
+    let settled = read_captured(CAPTURED_TEXT).expect("a real completed stream settles");
+    assert!(settled.is_completed());
+    assert_eq!(
+        settled.text,
+        "The sky looks blue because air molecules scatter blue sunlight more strongly than other colors."
+    );
+    assert!(settled.refusal.is_empty(), "nothing was refused");
+    assert_eq!(settled.id.as_deref().map(|id| id.starts_with("resp_")), Some(true));
+
+    let usage = settled.usage.expect("a real response reports usage");
+    assert_eq!(usage.input_tokens, 39);
+    assert_eq!(usage.output_tokens, 20);
+    assert_eq!(usage.total_tokens, 59);
+
+    // The whole answer arrived as deltas *and* as one `response.output_text.done`
+    // frame. That the two agree is the point: a disagreement would mean a delta
+    // was dropped, and the crate would have recorded it here.
+    assert_eq!(settled.part_disagreements, Vec::new());
+}
+
+/// A real tool-calling turn settles with both calls and its reasoning item.
+#[test]
+fn a_captured_tool_calling_turn_settles() {
+    let settled = read_captured(CAPTURED_TOOL_CALLS).expect("a real completed stream settles");
+    assert!(settled.is_completed());
+
+    let calls: Vec<&openai::items::CalledFunction> = settled.function_calls().collect();
+    assert_eq!(calls.len(), 2, "the model called the tool for both cities");
+    for call in &calls {
+        assert_eq!(call.name, "get_weather");
+        assert!(call.call_id.starts_with("call_"), "{}", call.call_id);
+        assert!(call.arguments.decode().unwrap()["city"].is_string());
+    }
+    let cities: Vec<String> =
+        calls.iter().map(|call| call.arguments.decode().unwrap()["city"].as_str().unwrap().to_owned()).collect();
+    assert_eq!(cities, vec!["Zurich".to_owned(), "Tokyo".to_owned()], "in the order the model made them");
+
+    // The reasoning item carries `encrypted_content`, because the request asked
+    // for it — which is what makes it replayable in the next turn.
+    let reasoning: Vec<&OutputItem> =
+        settled.items.iter().filter(|item| matches!(item, OutputItem::Reasoning(_))).collect();
+    assert_eq!(reasoning.len(), 1);
+    let OutputItem::Reasoning(item) = reasoning[0] else { unreachable!() };
+    let replayable = item.replayable().expect("encrypted content makes it replayable");
+    assert_eq!(replayable.id, item.id);
+    assert!(replayable.encrypted_content.starts_with("gAAAAA"), "the payload is Fernet-shaped");
 }
