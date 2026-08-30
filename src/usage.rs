@@ -10,9 +10,25 @@
 //! three per-token rates, computed in integer nanodollars so no rounding error
 //! can creep into a bill.
 
-use serde::Deserialize;
+use serde::{Deserialize, Deserializer};
 
 use crate::model::Pricing;
+
+/// A count that may arrive absent, `null`, or as a number.
+///
+/// All three mean the same thing — nothing of that kind was counted — and all
+/// three are what the wire really sends: OpenAI omits a breakdown it has nothing
+/// for, and a gateway was measured sending `"audio_tokens": null` and
+/// `"input_tokens": null` beside real numbers. `#[serde(default)]` alone handles
+/// only the absent case, so an explicit `null` failed the whole object and took
+/// the cache accounting down with it.
+///
+/// Zero rather than an `Option`, because "nothing of that kind" is a real count.
+/// A cost that reads as unknown when the answer is zero is a cost nobody can add
+/// up.
+fn counted<'de, D: Deserializer<'de>>(deserializer: D) -> Result<u32, D::Error> {
+    Ok(Option::<u32>::deserialize(deserializer)?.unwrap_or(0))
+}
 
 /// The breakdown of input tokens by how the cache treated them.
 ///
@@ -24,11 +40,11 @@ pub struct InputTokensDetails {
     ///
     /// Zero after any prefix change, which is exactly how a broken cache
     /// announces itself: no error, just a bill.
-    #[serde(default)]
+    #[serde(default, deserialize_with = "counted")]
     pub cached_tokens: u32,
     /// Tokens written to the cache. On GPT-5.6 these carry a 1.25× surcharge;
     /// earlier generations do not charge for writes at all.
-    #[serde(default)]
+    #[serde(default, deserialize_with = "counted")]
     pub cache_write_tokens: u32,
 }
 
@@ -37,29 +53,33 @@ pub struct InputTokensDetails {
 pub struct OutputTokensDetails {
     /// Tokens spent reasoning. Invisible in the answer, billed as output, and
     /// counted against `max_output_tokens`.
-    #[serde(default)]
+    #[serde(default, deserialize_with = "counted")]
     pub reasoning_tokens: u32,
 }
 
 /// What one response cost, in tokens.
 ///
 /// Every field defaults to zero, and a whole breakdown object may be absent as
-/// well as a count inside one. An absent counter means "nothing of that kind",
-/// never "unknown": a gateway that reports only the two totals still reports
-/// two real numbers, and refusing the object over an omitted breakdown would
-/// turn a thin cost report into a broken response.
+/// well as a count inside one. An absent *or `null`* counter means "nothing of
+/// that kind", never "unknown": a gateway that reports only the two totals still
+/// reports two real numbers, and refusing the object over an omitted breakdown
+/// would turn a thin cost report into a broken response. Both spellings of
+/// absence were measured live against a gateway that sends both.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Deserialize)]
 #[serde(default)]
 pub struct Usage {
     /// Every input token, cached and uncached alike.
+    #[serde(deserialize_with = "counted")]
     pub input_tokens: u32,
     /// How the cache treated them.
     pub input_tokens_details: InputTokensDetails,
     /// Every generated token, reasoning included.
+    #[serde(deserialize_with = "counted")]
     pub output_tokens: u32,
     /// How many of those were reasoning.
     pub output_tokens_details: OutputTokensDetails,
     /// Input plus output.
+    #[serde(deserialize_with = "counted")]
     pub total_tokens: u32,
 }
 

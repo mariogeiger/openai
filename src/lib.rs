@@ -108,8 +108,10 @@
 //!
 //! # Reading the answer back
 //!
-//! A request is half the API. The other half is the stream of Server-Sent
-//! Events a `stream: true` response returns, and it is decoded here too:
+//! A request is half the API, and the other half comes back two ways. A
+//! `stream: false` request answers with one body, decoded by
+//! [`Response`](response::Response). A `stream: true` request answers with
+//! Server-Sent Events, decoded here too:
 //! [`StreamEvent`](stream::StreamEvent) is one frame, and
 //! [`Settling`](settle::Settling) accumulates a sequence of them.
 //!
@@ -163,9 +165,7 @@
 //! # Deliberately out of scope
 //!
 //! No HTTP client, no async runtime, and no SSE transport: the caller owns the
-//! socket and hands this crate one `data:` payload at a time. Of the response
-//! body only [`Usage`](usage::Usage) and the streamed shapes are deserialized,
-//! since cache accounting is the crate's reason to exist. Chat Completions is
+//! socket and hands this crate one `data:` payload at a time. Chat Completions is
 //! not modeled at all. Stateful continuation (`previous_response_id`,
 //! `conversation`) is excluded on purpose: only the stateless path, where the
 //! caller supplies every input item, lets the caller control the rendered
@@ -188,6 +188,7 @@ pub mod items;
 pub mod model;
 pub mod prefix;
 pub mod request;
+pub mod response;
 pub mod settle;
 pub mod settled;
 pub mod stream;
