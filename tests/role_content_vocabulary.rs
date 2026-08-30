@@ -19,13 +19,13 @@
 //! ResponseOutputRefusal`. Both tables were confirmed live in both directions,
 //! each wrong pairing answered with the other set enumerated in the error.
 
-use openai::content::{ImageSource, InputBlock, OutputBlock};
+use openai::content::{FileSource, ImageSource, InputBlock, OutputBlock};
 use openai::context::{BreakpointError, BreakpointSlot, Context};
 use openai::model::Model;
 use openai::prefix::PrefixSettings;
 use openai::request::Request;
 use openai::tools::FunctionTool;
-use openai::values::{AssistantPhase, ImageDetail, InputRole};
+use openai::values::{AssistantPhase, FileDetail, ImageDetail, InputRole};
 use serde_json::{Value, json};
 
 /// `ResponseInputContent`, the content of a developer or user message. The
@@ -223,4 +223,69 @@ fn an_assistant_turn_renders_exactly_this() {
             {"type": "message", "role": "user", "content": [{"type": "input_text", "text": "Say it again."}]},
         ])
     );
+}
+
+/// A file block is spelled `input_file`, and its inline bytes reach the wire as a
+/// **data URL** rather than as bare base64.
+///
+/// The distinction is the whole reason this test exists. The reference calls
+/// `file_data` "the content of the file", which reads as bare base64 — and bare
+/// base64 is refused: measured live against the endpoint, both a hand-made PDF and
+/// a real one were answered with
+///
+/// ```text
+/// Invalid 'input[0].content[0].file_data'.
+///   param: input[0].content[0].file_data
+/// ```
+///
+/// while the identical bytes spelled `data:application/pdf;base64,…` returned 200
+/// and the document's own text. So `FileSource::Inline` takes the media type
+/// separately and the serializer builds the URL: the spelling that decides whether
+/// a request works at all is not left to the caller.
+#[test]
+fn a_file_block_sends_its_inline_bytes_as_a_data_url() {
+    let mut context = Context::new(vec![]);
+    context.push_user(vec![
+        InputBlock::file(FileSource::pdf("QkFTRTY0", "report.pdf"), FileDetail::High),
+        InputBlock::text("What does it say?"),
+    ]);
+    let body = body_of(&context);
+    let blocks = body["input"][0]["content"].as_array().expect("a block array");
+
+    assert_eq!(blocks[0]["type"], "input_file");
+    assert_eq!(blocks[0]["file_data"], "data:application/pdf;base64,QkFTRTY0");
+    assert_eq!(blocks[0]["filename"], "report.pdf");
+    assert_eq!(blocks[0]["detail"], "high");
+    assert!(blocks[0].get("file_id").is_none(), "one source, not two");
+    assert!(blocks[0].get("file_url").is_none(), "one source, not two");
+
+    // And it is in the input vocabulary, which the whole-body check above asserts
+    // for every block; stated here too because a file under `assistant` is the
+    // same class of defect as an `input_text` there.
+    assert!(INPUT_VOCABULARY.contains(&"input_file"));
+}
+
+/// Each of the four file sources sends exactly its own field.
+///
+/// One `match` over a sum type builds the wire fields, so two sources for one
+/// file is unreachable rather than merely untested — this asserts the match is
+/// complete and each arm distinct.
+#[test]
+fn each_file_source_sends_exactly_one_of_the_four_fields() {
+    let cases: [(FileSource, &str, &str); 3] = [
+        (FileSource::FileId("file-abc".to_owned()), "file_id", "file-abc"),
+        (FileSource::Url("https://example.invalid/a.pdf".to_owned()), "file_url", "https://example.invalid/a.pdf"),
+        (FileSource::Filename("known.pdf".to_owned()), "filename", "known.pdf"),
+    ];
+    for (source, field, value) in cases {
+        let mut context = Context::new(vec![]);
+        context.push_user(vec![InputBlock::file(source, FileDetail::Auto)]);
+        let block = body_of(&context)["input"][0]["content"][0].clone();
+        assert_eq!(block[field], value);
+        for other in ["file_id", "file_url", "file_data", "filename"] {
+            if other != field {
+                assert!(block.get(other).is_none(), "{field} also sent {other}: {block}");
+            }
+        }
+    }
 }

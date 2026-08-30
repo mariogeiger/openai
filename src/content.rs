@@ -23,7 +23,7 @@
 //! block, and two spellings of the same message are two different prefixes.
 //! One shape means one set of bytes.
 
-use crate::values::{AssistantPhase, ImageDetail, InputRole, api_enum};
+use crate::values::{AssistantPhase, FileDetail, ImageDetail, InputRole, api_enum};
 use serde::Serialize;
 
 api_enum! {
@@ -93,6 +93,74 @@ pub enum ImageSource {
     FileId(String),
 }
 
+/// Where a file comes from, and its name where the source does not carry one.
+///
+/// Four alternatives the reference lists as four optional fields. They are
+/// variants here for the reason [`ImageSource`] is: a `file_id` beside inline
+/// bytes is two sources for one file, and only one of them can be the one the
+/// model reads.
+///
+/// [`Self::Inline`] carries a filename because inline bytes have no name of
+/// their own, and the reference says a filename is needed to know what the bytes
+/// are. The other three name the file themselves.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum FileSource {
+    /// A file previously uploaded to the Files API.
+    FileId(String),
+    /// A URL the API fetches the file from.
+    Url(String),
+    /// The bytes inline, as a **data URL**, with the filename to read them as.
+    ///
+    /// The reference calls `file_data` "the content of the file", which reads as
+    /// bare base64 and is not: measured live, bare base64 — of a hand-made PDF
+    /// and of a real one alike — is answered with
+    /// `Invalid 'input[0].content[0].file_data'`, while the same bytes as
+    /// `data:application/pdf;base64,…` return 200 and the document's text. So
+    /// this variant takes the media type separately and
+    /// [`InputFile`]'s serializer builds the data URL, which is the one place
+    /// that knows the spelling.
+    ///
+    /// The bytes stay base64: encoding is the caller's step, and this crate takes
+    /// no base64 dependency to do it.
+    Inline {
+        /// The file's media type, such as `application/pdf`. Part of the data
+        /// URL, and what tells the API how to read the bytes.
+        media_type: String,
+        /// The base64 file content, without the `data:` prefix.
+        base64: String,
+        /// What to call it.
+        filename: String,
+    },
+    /// A name alone, for a file the API can already resolve by it.
+    Filename(String),
+}
+
+impl FileSource {
+    /// Inline PDF bytes, the common case.
+    ///
+    /// Named for the format because that is what the caller has, and it saves
+    /// spelling a media type whose exact string decides whether the request works
+    /// at all.
+    pub fn pdf(base64: impl Into<String>, filename: impl Into<String>) -> Self {
+        Self::Inline { media_type: "application/pdf".to_owned(), base64: base64.into(), filename: filename.into() }
+    }
+}
+
+/// A document the model reads, spelled `input_file`.
+///
+/// PDFs and other documents, rendered to pages the model looks at — which is why
+/// it has a `detail` like an image does, and why the same warning applies: the
+/// file sits inside the hashed prefix, so changing its detail invalidates the
+/// cache from that file onward.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct InputFile {
+    /// Where the file comes from.
+    pub source: FileSource,
+    /// How finely to render its pages.
+    pub detail: FileDetail,
+    pub(crate) prompt_cache_breakpoint: Option<PromptCacheBreakpoint>,
+}
+
 /// Text the model reads, spelled `input_text`. The workhorse block: the only
 /// one that can carry reusable instructions, and hence the one breakpoints
 /// usually land on.
@@ -145,6 +213,8 @@ pub enum InputBlock {
     Text(InputText),
     /// An image, spelled `input_image`.
     Image(InputImage),
+    /// A document, spelled `input_file`.
+    File(InputFile),
 }
 
 impl InputBlock {
@@ -157,6 +227,14 @@ impl InputBlock {
     pub fn image(source: ImageSource, detail: ImageDetail) -> Self {
         Self::Image(InputImage { source, detail, prompt_cache_breakpoint: None })
     }
+
+    /// A file block at the given detail level.
+    ///
+    /// The detail is stated per file rather than defaulted, like an image's, so
+    /// a caller reading the block can see what the model will be charged for.
+    pub fn file(source: FileSource, detail: FileDetail) -> Self {
+        Self::File(InputFile { source, detail, prompt_cache_breakpoint: None })
+    }
 }
 
 impl BreakpointableBlock for InputBlock {
@@ -164,6 +242,7 @@ impl BreakpointableBlock for InputBlock {
         Some(match self {
             Self::Text(b) => &b.prompt_cache_breakpoint,
             Self::Image(b) => &b.prompt_cache_breakpoint,
+            Self::File(b) => &b.prompt_cache_breakpoint,
         })
     }
 
@@ -171,6 +250,7 @@ impl BreakpointableBlock for InputBlock {
         Some(match self {
             Self::Text(b) => &mut b.prompt_cache_breakpoint,
             Self::Image(b) => &mut b.prompt_cache_breakpoint,
+            Self::File(b) => &mut b.prompt_cache_breakpoint,
         })
     }
 }
@@ -396,6 +476,26 @@ struct InputImageWire<'a> {
     prompt_cache_breakpoint: Option<PromptCacheBreakpoint>,
 }
 
+/// `input_file`, whose four possible sources are four fields on the wire and one
+/// [`FileSource`] here. Exactly one of the four is ever `Some`, because the match
+/// that builds this is over a sum type.
+#[derive(Serialize)]
+struct InputFileWire<'a> {
+    #[serde(rename = "type")]
+    kind: &'static str,
+    detail: FileDetail,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    file_id: Option<&'a str>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    file_url: Option<&'a str>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    file_data: Option<&'a str>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    filename: Option<&'a str>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    prompt_cache_breakpoint: Option<PromptCacheBreakpoint>,
+}
+
 /// No `prompt_cache_breakpoint` field exists here, and that is the point: the
 /// API answers `Unknown parameter` to one.
 #[derive(Serialize)]
@@ -423,6 +523,36 @@ impl Serialize for InputBlock {
                     image_url,
                     file_id,
                     prompt_cache_breakpoint: i.prompt_cache_breakpoint,
+                }
+                .serialize(s)
+            }
+            InputBlock::File(f) => {
+                // One match over the four sources, so the wire can never carry
+                // two of them: the sum type is what makes that unreachable
+                // rather than merely unlikely.
+                // The data URL is built here and only here. Bare base64 is a
+                // 400 — measured live — so the spelling is not a caller's to get
+                // right, and an owned `String` for that one variant is a small
+                // price for a request that works.
+                let inline = match &f.source {
+                    FileSource::Inline { media_type, base64, .. } => Some(format!("data:{media_type};base64,{base64}")),
+                    _ => None,
+                };
+                let (file_id, file_url, filename) = match &f.source {
+                    FileSource::FileId(id) => (Some(id.as_str()), None, None),
+                    FileSource::Url(url) => (None, Some(url.as_str()), None),
+                    FileSource::Inline { filename, .. } | FileSource::Filename(filename) => {
+                        (None, None, Some(filename.as_str()))
+                    }
+                };
+                InputFileWire {
+                    kind: "input_file",
+                    detail: f.detail,
+                    file_id,
+                    file_url,
+                    file_data: inline.as_deref(),
+                    filename,
+                    prompt_cache_breakpoint: f.prompt_cache_breakpoint,
                 }
                 .serialize(s)
             }

@@ -302,6 +302,23 @@ api_enum! {
     }
 }
 
+api_enum! {
+    /// `detail` on a file block: how finely to render a document's pages.
+    ///
+    /// A separate vocabulary from [`ImageDetail`], and smaller — a file has no
+    /// `original`. Two enums rather than one, because the API accepts different
+    /// sets and a shared enum would make `original` writable where it is refused.
+    FileDetail {
+        /// Let the model choose. The documented default — and on GPT-5.6 and
+        /// later it means high-quality rendering, which costs more input tokens.
+        Auto => "auto",
+        /// Cheaper, coarser rendering.
+        Low => "low",
+        /// Higher-quality rendering.
+        High => "high",
+    }
+}
+
 api_enum! { roundtrip
     /// `status` on a response object: where generation got to.
     ///
