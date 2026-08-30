@@ -97,6 +97,39 @@ shape is in doubt, capture it.
   optional ones, and report a thinner `usage`. Decoding must tolerate all three,
   which is why absent counters read as zero rather than failing the frame.
 
+## The remaining gap, in priority order
+
+The mission is whole coverage, so what is missing is written down rather than
+left to be rediscovered. Priority is by what a real consumer needs.
+
+1. **Hosted-tool definitions.** Their events and call items decode; the
+   request-side definitions that turn them on do not exist. 15 tool types, each
+   with its own configuration: `web_search`, `file_search`, `code_interpreter`,
+   `image_generation`, `mcp`, `shell`, `local_shell`, `computer_use_preview`,
+   `apply_patch`, `custom`, `tool_search`, `namespace`, `programmatic_tool_calling`,
+   `additional_tools`, `web_search_preview`. The highest-value first, and each is
+   its own commit. Note the caching consequence: a hosted tool joins the `tools`
+   array, so adding one rewrites the whole prefix — the same fact that froze the
+   array in the first place.
+2. **`prompt`, the reusable prompt template.** `id`, `version`, and a variables
+   map whose values are strings or input blocks. Server-side content the caller
+   does not see, so its prefix implications need measuring before it is modeled.
+3. **The remaining input item kinds.** The request side models messages, function
+   calls, function outputs, and replayed reasoning. The reference lists 32 item
+   kinds; the rest are hosted-tool calls and their outputs, plus `item_reference`
+   and the compaction items. Model them alongside the tool whose calls they are.
+4. **`moderation`.** A model name plus per-direction `score` or `block` policies.
+5. **Five shell-call streaming events.** Their payload is a structured command
+   list a caller running commands has to agree with exactly; model it with the
+   `shell` tool definition, not before.
+6. **`Response` for the non-streaming path, more deeply typed.** `Response::raw`
+   keeps every field, and the ones a caller reads through it — `created_at`,
+   `tool_usage`, `billing` — are candidates for names of their own once it is
+   clear which are load-bearing.
+7. **`scoped_content` and `input_audio`.** Both are in the documented input
+   vocabulary and neither is modeled. Confirm live what each accepts first: the
+   reference does not describe `scoped_content` at all.
+
 ## Deliberately out of scope
 
 `SOUL.md` states these with reasons; do not add them without changing that file
