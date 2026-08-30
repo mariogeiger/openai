@@ -1,0 +1,100 @@
+{
+ "id": "resp_captured_2026_08_30",
+ "created_at": 1788081675,
+ "error": null,
+ "incomplete_details": null,
+ "instructions": null,
+ "metadata": {
+  "probe": "buffered"
+ },
+ "model": "openai/openai/gpt-5.6-sol",
+ "object": "response",
+ "output": [
+  {
+   "id": "msg_captured",
+   "content": [
+    {
+     "annotations": [],
+     "text": "OK",
+     "type": "output_text",
+     "logprobs": []
+    }
+   ],
+   "role": "assistant",
+   "status": "completed",
+   "type": "message",
+   "phase": "final_answer"
+  }
+ ],
+ "parallel_tool_calls": true,
+ "temperature": 1.0,
+ "tool_choice": "auto",
+ "tools": [],
+ "top_p": 0.98,
+ "max_output_tokens": null,
+ "previous_response_id": null,
+ "reasoning": {
+  "context": "all_turns",
+  "effort": "low",
+  "mode": "standard",
+  "summary": null
+ },
+ "status": "completed",
+ "text": {
+  "format": {
+   "type": "text"
+  },
+  "verbosity": "low"
+ },
+ "truncation": "disabled",
+ "usage": {
+  "input_tokens": 11,
+  "input_tokens_details": {
+   "audio_tokens": null,
+   "cached_tokens": 0,
+   "text_tokens": null,
+   "cache_write_tokens": 0
+  },
+  "output_tokens": 5,
+  "output_tokens_details": {
+   "reasoning_tokens": 0,
+   "text_tokens": null
+  },
+  "total_tokens": 16,
+  "cost": null
+ },
+ "user": null,
+ "store": false,
+ "background": false,
+ "billing": {
+  "payer": "developer"
+ },
+ "completed_at": 1788081676,
+ "frequency_penalty": 0.0,
+ "max_tool_calls": null,
+ "moderation": null,
+ "presence_penalty": 0.0,
+ "prompt_cache_key": null,
+ "prompt_cache_retention": "24h",
+ "safety_identifier": null,
+ "service_tier": "default",
+ "tool_usage": {
+  "image_gen": {
+   "input_tokens": 0,
+   "input_tokens_details": {
+    "image_tokens": 0,
+    "text_tokens": 0
+   },
+   "output_tokens": 0,
+   "output_tokens_details": {
+    "image_tokens": 0,
+    "text_tokens": 0
+   },
+   "total_tokens": 0
+  },
+  "web_search": {
+   "num_requests": 0
+  }
+ },
+ "top_logprobs": 0
+}
