@@ -255,6 +255,11 @@ impl Context {
         self.items.push(InputItem::Message(Message::Assistant { phase, content: blocks }));
     }
 
+    /// Append one complete assistant item with its original phase and blocks.
+    pub fn push_assistant_item(&mut self, phase: AssistantPhase, blocks: Vec<OutputBlock>) {
+        self.push_assistant(phase, blocks);
+    }
+
     /// Append a one-block assistant message holding what the model said.
     pub fn push_assistant_text(&mut self, phase: AssistantPhase, text: impl Into<String>) {
         self.push_assistant(phase, vec![OutputBlock::text(text)]);

@@ -10,6 +10,16 @@ and the working instructions. 0.5.0 split it into `SOUL.md` and `AGENTS.md`; the
 older references are left as they were written, because a changelog records what
 was true at the time.
 
+## [0.6.0] — 2026-09-03
+
+- Unknown response output items now retain their complete JSON value. A
+  stateless consumer can preserve or explicitly reject a new provider item
+  instead of losing everything but its type name.
+- `Context::push_assistant_item` appends one complete assistant message with its
+  original `phase`, text, and refusal blocks.
+
+  `openai` is now 0.6.0.
+
 ## [0.5.0] — 2026-08-30
 
 The mission stated: **represent the entire OpenAI Responses API faithfully in

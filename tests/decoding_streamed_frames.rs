@@ -187,7 +187,10 @@ fn an_output_item_kind_this_crate_ignores_is_not_an_error() {
         event,
         StreamEvent::OutputItemDone {
             output_index: 2,
-            item: OutputItem::Unmodeled { kind: "crystal_ball_call".to_owned() }
+            item: OutputItem::Unmodeled {
+                kind: "crystal_ball_call".to_owned(),
+                item: json!({"type": "crystal_ball_call", "id": "cb_1"}),
+            }
         }
     );
 }
