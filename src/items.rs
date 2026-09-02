@@ -163,6 +163,8 @@ pub enum OutputItem {
     Unmodeled {
         /// The item's `type`, for logging.
         kind: String,
+        /// The whole item, so a consumer never has to drop an unknown kind.
+        item: Value,
     },
 }
 

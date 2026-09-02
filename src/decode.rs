@@ -285,7 +285,7 @@ pub(crate) fn output_item(item: &Value) -> Result<OutputItem, FrameError> {
                 status: optional_string(item, "status"),
                 item: item.clone(),
             },
-            None => OutputItem::Unmodeled { kind: other.to_owned() },
+            None => OutputItem::Unmodeled { kind: other.to_owned(), item: item.clone() },
         },
     })
 }
