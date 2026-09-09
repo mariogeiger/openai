@@ -71,7 +71,7 @@ context.push_user_text("What changed in this file?");
 context.push_assistant_text(AssistantPhase::FinalAnswer, "It gained a main function.");
 context.push_user_text("And now?");
 
-let prefix = PrefixSettings::new(Model::gpt_5_6_sol());
+let prefix = PrefixSettings::new(Model::gpt_6_astra());
 let request = Request::new(&context, prefix)?
     // Narrow availability without touching the array, and so without paying
     // to write the prefix again.
@@ -102,6 +102,7 @@ reqwest::Client::new()
 | A `developer` or `user` message spelling its text `output_text` | `Message::Input` holds `InputBlock`, which has no such variant |
 | A cache breakpoint on a refusal | `Refusal` has no breakpoint field; the API answers `Unknown parameter` to one |
 | `max` effort on a model that refuses it | `EffortNoneToMax` and `EffortNoneToXhigh` are different types |
+| `none` effort on GPT-6 Astra | Astra takes `EffortLowToMax`, which has no `None` variant |
 | `prompt_cache_options` and `prompt_cache_retention` together | one `match` on the model produces exactly one of them |
 | A fifth cache breakpoint | `BreakpointSlot` has four variants |
 | A fourth explicit breakpoint under `implicit` mode | `Request::new` returns `TooManyExplicitBreakpoints` — OpenAI's own breakpoint takes one of the four writes |
@@ -142,14 +143,14 @@ sees, and stays that way the day OpenAI changes a default.
 **The API documents no default** → `Option`, omitted when absent, because
 presence is a real runtime distinction:
 `reasoning.effort`, `reasoning.mode`, `reasoning.summary`, `context_management`,
-`max_output_tokens`, `instructions`, `prompt_cache_key`, a tool's `strict`, and
-GPT-5.4's `prompt_cache_retention`.
+`max_output_tokens`, `instructions`, `prompt_cache_key`, a tool's `strict` or
+`async`, and GPT-5.4's `prompt_cache_retention`.
 
 `reasoning.effort` is the field this matters most for. The reference names no
-default, a response that never carried one reports `"effort": null`, and the four
-*models* document four different levels for themselves. So the crate sends
-nothing unless told, and `ModelId::default_effort` states what each model does
-with silence — a readable fact, not an imposed value:
+default, and a response that never carried one reports `"effort": null`. So the
+crate sends nothing unless told. `ModelId::default_effort` states a model-level
+default where the model page names one and returns `None` for Astra, whose page
+names no default:
 
 ```rust
 use openai::model::{EffortNoneToMax, Model, ModelId};
@@ -158,7 +159,11 @@ use openai::prefix::PrefixSettings;
 // Nothing chosen: no `reasoning.effort` on the wire at all.
 assert_eq!(PrefixSettings::new(Model::gpt_5_6_sol()).effort(), None);
 // What the model will do anyway, readable without being sent.
-assert_eq!(ModelId::Gpt5_6Sol.default_effort(), openai::ReasoningEffort::Medium);
+assert_eq!(
+    ModelId::Gpt5_6Sol.default_effort(),
+    Some(openai::ReasoningEffort::Medium),
+);
+assert_eq!(ModelId::Gpt6Astra.default_effort(), None);
 // Or say it outright.
 let pinned = Model::gpt_5_6_sol().with_effort(EffortNoneToMax::Xhigh);
 ```
@@ -194,10 +199,13 @@ URL.
 
 ## Modeled
 
-`gpt-5.6-sol`, `gpt-5.6-terra`, `gpt-5.6-luna`, `gpt-5.5`, `gpt-5.5-pro`,
-`gpt-5.4`. Each carries its own `max_output_tokens`, context window, knowledge
-cutoff, minimum cacheable prefix, and exact per-token pricing including the
-cache read and write rates.
+`gpt-6-astra`, `gpt-5.6-sol`, `gpt-5.6-terra`, `gpt-5.6-luna`, `gpt-5.5`,
+`gpt-5.5-pro`, `gpt-5.4`. Each carries its maximum input and output sizes,
+context window, knowledge cutoff, minimum cacheable prefix, and exact base
+per-token pricing including cache reads and writes. `Pricing` documents the
+long-context and service-tier adjustments its exact arithmetic excludes.
+
+GPT-6 Astra has its own `EffortLowToMax`, so `none` does not compile.
 
 ## Reading the stream back
 

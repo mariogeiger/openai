@@ -61,7 +61,7 @@
 //!   distinction — told versus not told — and the field is an `Option` that is
 //!   omitted when absent. `reasoning.effort`, `reasoning.mode`,
 //!   `reasoning.summary`, `context_management`, `max_output_tokens`,
-//!   `instructions`, `prompt_cache_key`, and GPT-5.4's
+//!   `instructions`, `prompt_cache_key`, a function tool's `async`, and GPT-5.4's
 //!   `prompt_cache_retention` are these.
 //!
 //! An enclosing object disappears when every field inside it is absent: an empty
@@ -91,7 +91,7 @@
 //! context.push_user_text("What changed in this file?");
 //!
 //! // The model carries its own effort range and its own caching field.
-//! let prefix = PrefixSettings::new(Model::gpt_5_6_sol());
+//! let prefix = PrefixSettings::new(Model::gpt_6_astra());
 //! let mut request = Request::new(&context, prefix)?;
 //!
 //! // Restrict availability without touching the array, and so without paying

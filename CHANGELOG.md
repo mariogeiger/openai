@@ -10,6 +10,19 @@ and the working instructions. 0.5.0 split it into `SOUL.md` and `AGENTS.md`; the
 older references are left as they were written, because a changelog records what
 was true at the time.
 
+## [0.7.0] — 2026-09-09
+
+- Added GPT-6 Astra as `Model::gpt_6_astra()`, with its exact `low` through
+  `max` effort set. `none` is absent at the type level. The model reports its
+  1,050,000-token context, 922,000-token maximum input, 128,000-token maximum
+  output, April 2026 knowledge cutoff, and $10 / $1 / $12.50 / $50 per-million
+  base input / cached-read / cache-write / output prices. The existing `Pricing`
+  caveat still excludes the surcharge above 272K input and service-tier changes.
+- `ModelId::default_effort` now returns `Option<ReasoningEffort>` because Astra's
+  model page names no default.
+
+  `openai` is now 0.7.0.
+
 ## [0.6.0] — 2026-09-03
 
 - Unknown response output items now retain their complete JSON value. A

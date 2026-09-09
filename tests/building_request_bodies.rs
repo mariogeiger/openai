@@ -156,12 +156,12 @@ fn store_is_always_sent_and_always_the_caller_s() {
 fn the_model_s_own_default_effort_is_a_readable_fact() {
     use openai::model::ModelId;
     use openai::values::ReasoningEffort;
-    assert_eq!(ModelId::Gpt5_6Sol.default_effort(), ReasoningEffort::Medium);
-    assert_eq!(ModelId::Gpt5_6Terra.default_effort(), ReasoningEffort::Medium);
-    assert_eq!(ModelId::Gpt5_6Luna.default_effort(), ReasoningEffort::Medium);
-    assert_eq!(ModelId::Gpt5_5.default_effort(), ReasoningEffort::Medium);
-    assert_eq!(ModelId::Gpt5_5Pro.default_effort(), ReasoningEffort::High);
-    assert_eq!(ModelId::Gpt5_4.default_effort(), ReasoningEffort::None);
+    assert_eq!(ModelId::Gpt5_6Sol.default_effort(), Some(ReasoningEffort::Medium));
+    assert_eq!(ModelId::Gpt5_6Terra.default_effort(), Some(ReasoningEffort::Medium));
+    assert_eq!(ModelId::Gpt5_6Luna.default_effort(), Some(ReasoningEffort::Medium));
+    assert_eq!(ModelId::Gpt5_5.default_effort(), Some(ReasoningEffort::Medium));
+    assert_eq!(ModelId::Gpt5_5Pro.default_effort(), Some(ReasoningEffort::High));
+    assert_eq!(ModelId::Gpt5_4.default_effort(), Some(ReasoningEffort::None));
 
     // Stated, never imposed: the body still carries no effort.
     let context = Context::new(vec![]);

@@ -2,17 +2,18 @@
 //!
 //! Models differ in three ways that a single shared struct would blur:
 //!
-//! * **Which reasoning efforts they accept.** GPT-5.6 adds `max`; GPT-5.5 Pro
-//!   refuses everything below `medium`.
-//! * **Which field controls cache lifetime.** GPT-5.6 and later use
+//! * **Which reasoning efforts they accept.** GPT-6 Astra adds `max` but
+//!   refuses `none`; GPT-5.5 Pro refuses everything below `medium`.
+//! * **Which field controls cache lifetime.** GPT-5.6 and later, including Astra, use
 //!   `prompt_cache_options.ttl`; earlier models use `prompt_cache_retention`.
 //!   These are different fields with different value sets, and sending the
 //!   wrong one is a 400.
 //! * **Whether explicit cache breakpoints exist at all.** Only GPT-5.6 and
-//!   later honor them.
+//!   later, including Astra, honor them.
 //!
 //! So the type boundary follows the parameter set, not the model name: the
-//! three GPT-5.6 tiers accept exactly the same parameters and share one type
+//! Astra gets its own type, while the three GPT-5.6 tiers accept exactly the
+//! same parameters and share one type
 //! that carries a [`Gpt5_6Tier`], while GPT-5.5, GPT-5.5 Pro, and GPT-5.4 each
 //! get their own type because each accepts something the others do not.
 
@@ -28,6 +29,28 @@ api_enum! {
         /// Modest reasoning.
         Low => "low",
         /// The GPT-5.6 default.
+        Medium => "medium",
+        /// Deeper reasoning.
+        High => "high",
+        /// Long runs.
+        Xhigh => "xhigh",
+        /// The most reasoning available.
+        Max => "max",
+    }
+}
+
+api_enum! {
+    /// The reasoning efforts GPT-6 Astra accepts. `none` is absent because
+    /// Astra refuses it rather than treating it as a weaker level.
+    ///
+    /// ```compile_fail
+    /// use openai::model::EffortLowToMax;
+    /// let _ = EffortLowToMax::None;
+    /// ```
+    EffortLowToMax {
+        /// The least reasoning Astra offers.
+        Low => "low",
+        /// Balanced reasoning.
         Medium => "medium",
         /// Deeper reasoning.
         High => "high",
@@ -150,6 +173,85 @@ impl Default for Gpt5_6Caching {
     /// a server-side default that could shift.
     fn default() -> Self {
         Self { mode: CacheMode::Implicit, ttl: CacheTtl::ThirtyMinutes }
+    }
+}
+
+/// The cache controls GPT-6 Astra shares with GPT-5.6.
+///
+/// The alias names the model-facing contract while keeping one representation
+/// for the identical `prompt_cache_options` object.
+pub type Gpt6AstraCaching = Gpt5_6Caching;
+
+/// GPT-6 Astra's accepted parameter set.
+///
+/// Its effort type starts at `low`, so `none` cannot reach the wire. Astra uses
+/// the same explicit breakpoint and cache-TTL controls as GPT-5.6.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Gpt6Astra {
+    /// How much the model reasons before answering, when the caller says.
+    pub effort: Option<EffortLowToMax>,
+    /// Standard or Pro execution, independent of effort.
+    pub mode: Option<ReasoningMode>,
+    /// Which earlier reasoning is rendered into this turn.
+    pub reasoning_context: ReasoningContext,
+    /// Breakpoint mode and minimum cache lifetime.
+    pub caching: Gpt6AstraCaching,
+}
+
+impl Default for Gpt6Astra {
+    /// Documented defaults are emitted; fields with no documented default stay
+    /// absent so the crate does not decide how Astra thinks.
+    fn default() -> Self {
+        Self {
+            effort: None,
+            mode: None,
+            reasoning_context: ReasoningContext::Auto,
+            caching: Gpt6AstraCaching::default(),
+        }
+    }
+}
+
+impl Gpt6Astra {
+    /// Astra with documented defaults and no invented reasoning choice.
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Set a reasoning level Astra accepts.
+    pub fn with_effort(mut self, effort: EffortLowToMax) -> Self {
+        self.effort = Some(effort);
+        self
+    }
+
+    /// Leave `reasoning.effort` unsent.
+    pub fn without_effort(mut self) -> Self {
+        self.effort = None;
+        self
+    }
+
+    /// Select standard or Pro execution.
+    pub fn with_mode(mut self, mode: ReasoningMode) -> Self {
+        self.mode = Some(mode);
+        self
+    }
+
+    /// Choose which earlier reasoning the model may render.
+    pub fn with_reasoning_context(mut self, context: ReasoningContext) -> Self {
+        self.reasoning_context = context;
+        self
+    }
+
+    /// Turn off OpenAI's implicit breakpoint, leaving all four slots available
+    /// for explicit breakpoints.
+    pub fn with_explicit_cache_only(mut self) -> Self {
+        self.caching.mode = CacheMode::Explicit;
+        self
+    }
+
+    /// Choose the breakpoint mode and minimum cache lifetime outright.
+    pub fn with_caching(mut self, caching: Gpt6AstraCaching) -> Self {
+        self.caching = caching;
+        self
     }
 }
 
@@ -384,6 +486,8 @@ impl Gpt5_4 {
 /// documented fact about the model rather than something the caller chooses.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum ModelId {
+    /// `gpt-6-astra`.
+    Gpt6Astra,
     /// `gpt-5.6-sol`.
     Gpt5_6Sol,
     /// `gpt-5.6-terra`.
@@ -440,6 +544,7 @@ impl ModelId {
     /// The string sent in the `model` field.
     pub fn api_id(self) -> &'static str {
         match self {
+            ModelId::Gpt6Astra => "gpt-6-astra",
             ModelId::Gpt5_6Sol => "gpt-5.6-sol",
             ModelId::Gpt5_6Terra => "gpt-5.6-terra",
             ModelId::Gpt5_6Luna => "gpt-5.6-luna",
@@ -456,7 +561,7 @@ impl ModelId {
     /// explicit breakpoints together with a model that ignores them, because
     /// the alternative is paying for a prefix nobody can reuse.
     pub fn supports_explicit_cache_breakpoints(self) -> bool {
-        matches!(self, ModelId::Gpt5_6Sol | ModelId::Gpt5_6Terra | ModelId::Gpt5_6Luna)
+        matches!(self, ModelId::Gpt6Astra | ModelId::Gpt5_6Sol | ModelId::Gpt5_6Terra | ModelId::Gpt5_6Luna)
     }
 
     /// Shortest visible prefix this model will cache, in tokens.
@@ -474,6 +579,12 @@ impl ModelId {
         1_050_000
     }
 
+    /// Largest input the model accepts. The remaining 128K tokens in the
+    /// shared context window are reserved for output.
+    pub fn max_input_tokens(self) -> u32 {
+        922_000
+    }
+
     /// Largest `max_output_tokens` this model accepts, reasoning tokens
     /// included. [`crate::request::Request::new`] rejects anything above it.
     pub fn max_output_tokens(self) -> u32 {
@@ -483,6 +594,7 @@ impl ModelId {
     /// The month through which the model's knowledge is reliable.
     pub fn knowledge_cutoff(self) -> YearMonth {
         let (year, month) = match self {
+            ModelId::Gpt6Astra => (2026, 4),
             ModelId::Gpt5_6Sol | ModelId::Gpt5_6Terra | ModelId::Gpt5_6Luna => (2026, 2),
             ModelId::Gpt5_5 | ModelId::Gpt5_5Pro => (2025, 12),
             ModelId::Gpt5_4 => (2025, 8),
@@ -491,7 +603,8 @@ impl ModelId {
     }
 
     /// The reasoning effort this model documents for itself, for a request that
-    /// sends no `reasoning.effort` at all.
+    /// sends no `reasoning.effort` at all. `None` when the model page states no
+    /// default, as Astra's currently does.
     ///
     /// A fact about the model, from its model page — GPT-5.6 "medium (default)",
     /// GPT-5.5 "medium (default)", GPT-5.5 Pro "high (default)", GPT-5.4
@@ -499,19 +612,22 @@ impl ModelId {
     /// and deliberately not applied: `reasoning.effort` has no documented
     /// default at the field level, and four models with four different levels
     /// is exactly why. Choosing one here would be the crate deciding.
-    pub fn default_effort(self) -> ReasoningEffort {
+    pub fn default_effort(self) -> Option<ReasoningEffort> {
         match self {
+            ModelId::Gpt6Astra => None,
             ModelId::Gpt5_6Sol | ModelId::Gpt5_6Terra | ModelId::Gpt5_6Luna | ModelId::Gpt5_5 => {
-                ReasoningEffort::Medium
+                Some(ReasoningEffort::Medium)
             }
-            ModelId::Gpt5_5Pro => ReasoningEffort::High,
-            ModelId::Gpt5_4 => ReasoningEffort::None,
+            ModelId::Gpt5_5Pro => Some(ReasoningEffort::High),
+            ModelId::Gpt5_4 => Some(ReasoningEffort::None),
         }
     }
 
     /// List price per token (see [`Pricing`] for what is not represented).
     pub fn pricing(self) -> Pricing {
         let (input, cached, write, output) = match self {
+            // Astra and GPT-5.6: cached reads at 0.1x, cache writes at 1.25x.
+            ModelId::Gpt6Astra => (10_000, 1_000, 12_500, 50_000),
             // GPT-5.6: cached reads at 0.1x, cache writes at 1.25x.
             ModelId::Gpt5_6Sol => (4_000, 400, 5_000, 20_000),
             ModelId::Gpt5_6Terra => (2_000, 200, 2_500, 12_000),
@@ -538,6 +654,8 @@ impl ModelId {
 /// is not merely rejected at runtime — it does not exist on that variant.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Model {
+    /// GPT-6 Astra.
+    Gpt6Astra(Gpt6Astra),
     /// A GPT-5.6 tier.
     Gpt5_6(Gpt5_6),
     /// GPT-5.5.
@@ -552,6 +670,7 @@ impl Model {
     /// Identity without per-call parameters.
     pub fn id(&self) -> ModelId {
         match self {
+            Model::Gpt6Astra(_) => ModelId::Gpt6Astra,
             Model::Gpt5_6(m) => match m.tier {
                 Gpt5_6Tier::Sol => ModelId::Gpt5_6Sol,
                 Gpt5_6Tier::Terra => ModelId::Gpt5_6Terra,
@@ -566,6 +685,11 @@ impl Model {
     /// The string sent in the `model` field.
     pub fn api_id(&self) -> &'static str {
         self.id().api_id()
+    }
+
+    /// GPT-6 Astra with documented defaults.
+    pub fn gpt_6_astra() -> Gpt6Astra {
+        Gpt6Astra::default()
     }
 
     /// GPT-5.6 Sol with documented defaults.
@@ -596,6 +720,12 @@ impl Model {
     /// GPT-5.4 with documented defaults.
     pub fn gpt_5_4() -> Gpt5_4 {
         Gpt5_4::default()
+    }
+}
+
+impl From<Gpt6Astra> for Model {
+    fn from(m: Gpt6Astra) -> Self {
+        Model::Gpt6Astra(m)
     }
 }
 
@@ -718,10 +848,10 @@ mod tests {
     /// What each model does when told nothing, straight from its model page.
     #[test]
     fn each_model_documents_its_own_effort_for_an_unasked_request() {
-        assert_eq!(ModelId::Gpt5_6Sol.default_effort(), ReasoningEffort::Medium);
-        assert_eq!(ModelId::Gpt5_5.default_effort(), ReasoningEffort::Medium);
-        assert_eq!(ModelId::Gpt5_5Pro.default_effort(), ReasoningEffort::High);
-        assert_eq!(ModelId::Gpt5_4.default_effort(), ReasoningEffort::None);
+        assert_eq!(ModelId::Gpt5_6Sol.default_effort(), Some(ReasoningEffort::Medium));
+        assert_eq!(ModelId::Gpt5_5.default_effort(), Some(ReasoningEffort::Medium));
+        assert_eq!(ModelId::Gpt5_5Pro.default_effort(), Some(ReasoningEffort::High));
+        assert_eq!(ModelId::Gpt5_4.default_effort(), Some(ReasoningEffort::None));
     }
 
     /// GPT-5.4's retention default is its organization's policy, not a value, so
