@@ -23,6 +23,7 @@
 //! block, and two spellings of the same message are two different prefixes.
 //! One shape means one set of bytes.
 
+use crate::model::EffortLowToMax;
 use crate::values::{AssistantPhase, FileDetail, ImageDetail, InputRole, api_enum};
 use serde::Serialize;
 
@@ -387,6 +388,31 @@ pub struct ReplayedReasoning {
     pub encrypted_content: String,
 }
 
+/// A mid-conversation change to Astra's reasoning effort.
+///
+/// The item stays in the append-only history, so later requests preserve the
+/// prompt prefix while changing the effort that applies after this point.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ConfigurationUpdate {
+    /// The server-assigned identifier, when replaying an item that has one.
+    pub id: Option<String>,
+    /// The effort that applies until a later update replaces it.
+    pub effort: Option<EffortLowToMax>,
+}
+
+impl ConfigurationUpdate {
+    /// Change reasoning effort without inventing a server-side item identifier.
+    pub fn reasoning_effort(effort: EffortLowToMax) -> Self {
+        Self { id: None, effort: Some(effort) }
+    }
+
+    /// Preserve the identifier returned with a configuration update.
+    pub fn with_id(mut self, id: impl Into<String>) -> Self {
+        self.id = Some(id.into());
+        self
+    }
+}
+
 /// One entry in the `input` array.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum InputItem {
@@ -398,6 +424,8 @@ pub enum InputItem {
     FunctionCallOutput(FunctionCallOutput),
     /// Reasoning from an earlier response.
     Reasoning(ReplayedReasoning),
+    /// An Astra reasoning change that remains in effect for later items.
+    ConfigurationUpdate(ConfigurationUpdate),
 }
 
 impl InputItem {
@@ -414,7 +442,7 @@ impl InputItem {
                 FunctionOutput::Blocks(blocks) => last_breakpoint_site(blocks),
                 FunctionOutput::Text(_) => None,
             },
-            InputItem::FunctionCall(_) | InputItem::Reasoning(_) => None,
+            InputItem::FunctionCall(_) | InputItem::Reasoning(_) | InputItem::ConfigurationUpdate(_) => None,
         }
     }
 
@@ -427,7 +455,7 @@ impl InputItem {
                 FunctionOutput::Blocks(blocks) => blocks.get_mut(block)?.breakpoint_site_mut(),
                 FunctionOutput::Text(_) => None,
             },
-            InputItem::FunctionCall(_) | InputItem::Reasoning(_) => None,
+            InputItem::FunctionCall(_) | InputItem::Reasoning(_) | InputItem::ConfigurationUpdate(_) => None,
         }
     }
 
@@ -444,7 +472,7 @@ impl InputItem {
                 FunctionOutput::Blocks(blocks) => breakpoint_count(blocks),
                 FunctionOutput::Text(_) => 0,
             },
-            InputItem::FunctionCall(_) | InputItem::Reasoning(_) => 0,
+            InputItem::FunctionCall(_) | InputItem::Reasoning(_) | InputItem::ConfigurationUpdate(_) => 0,
         }
     }
 }
@@ -617,6 +645,22 @@ struct FunctionCallOutputWire<'a> {
 }
 
 #[derive(Serialize)]
+struct ConfigurationUpdateReasoningWire {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    effort: Option<EffortLowToMax>,
+}
+
+#[derive(Serialize)]
+struct ConfigurationUpdateWire<'a> {
+    #[serde(rename = "type")]
+    kind: &'static str,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    id: Option<&'a str>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    reasoning: Option<ConfigurationUpdateReasoningWire>,
+}
+
+#[derive(Serialize)]
 struct ReasoningWire<'a> {
     #[serde(rename = "type")]
     kind: &'static str,
@@ -663,6 +707,12 @@ impl Serialize for InputItem {
                 ReasoningWire { kind: "reasoning", id: &r.id, encrypted_content: &r.encrypted_content, summary: [] }
                     .serialize(s)
             }
+            InputItem::ConfigurationUpdate(update) => ConfigurationUpdateWire {
+                kind: "configuration_update",
+                id: update.id.as_deref(),
+                reasoning: update.effort.map(|effort| ConfigurationUpdateReasoningWire { effort: Some(effort) }),
+            }
+            .serialize(s),
         }
     }
 }

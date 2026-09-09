@@ -1,0 +1,35 @@
+{
+  "background": false,
+  "input": [
+    {
+      "content": [
+        {
+          "text": "Reply with exactly ASTRA_OK.",
+          "type": "input_text"
+        }
+      ],
+      "role": "user",
+      "type": "message"
+    }
+  ],
+  "max_output_tokens": 512,
+  "model": "gpt-6-astra",
+  "parallel_tool_calls": true,
+  "prompt_cache_options": {
+    "mode": "implicit",
+    "ttl": "30m"
+  },
+  "reasoning": {
+    "context": "auto",
+    "effort": "max"
+  },
+  "store": true,
+  "stream": false,
+  "text": {
+    "format": {
+      "type": "text"
+    },
+    "verbosity": "medium"
+  },
+  "tool_choice": "auto"
+}

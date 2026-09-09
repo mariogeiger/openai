@@ -19,9 +19,10 @@
 //!   to be rolled or cleared.
 
 use crate::content::{
-    FunctionCall, FunctionCallOutput, FunctionOutput, InputBlock, InputItem, Message, OutputBlock,
+    ConfigurationUpdate, FunctionCall, FunctionCallOutput, FunctionOutput, InputBlock, InputItem, Message, OutputBlock,
     PromptCacheBreakpoint, ReplayedReasoning,
 };
+use crate::model::EffortLowToMax;
 use crate::tools::{AllowedTools, AllowedToolsError, AllowedToolsMode, FunctionTool};
 use crate::values::{AssistantPhase, InputRole};
 
@@ -161,6 +162,16 @@ impl Context {
     /// rather than sent empty, since `[]` and absent render differently.
     pub fn new(tools: Vec<FunctionTool>) -> Self {
         Self { tools, items: Vec::new(), slots: [None; CACHE_WRITE_SLOTS] }
+    }
+
+    pub(crate) fn configuration_update_count(&self) -> usize {
+        self.items.iter().filter(|item| matches!(item, InputItem::ConfigurationUpdate(_))).count()
+    }
+
+    pub(crate) fn has_adjacent_configuration_updates(&self) -> bool {
+        self.items
+            .windows(2)
+            .any(|pair| matches!(pair, [InputItem::ConfigurationUpdate(_), InputItem::ConfigurationUpdate(_)]))
     }
 
     /// The frozen tool array.
@@ -314,6 +325,14 @@ impl Context {
             call_id: call_id.into(),
             output: FunctionOutput::Blocks(blocks),
         }));
+    }
+
+    /// Change GPT-6 Astra's reasoning effort from this point in the history.
+    ///
+    /// Appending the item preserves every earlier byte, unlike changing the
+    /// request-level effort that helped form the cached prefix.
+    pub fn push_configuration_update(&mut self, effort: EffortLowToMax) {
+        self.items.push(InputItem::ConfigurationUpdate(ConfigurationUpdate::reasoning_effort(effort)));
     }
 
     /// Append a reasoning item from an earlier response.

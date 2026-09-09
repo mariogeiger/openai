@@ -113,6 +113,19 @@ pub enum RequestError {
         /// How many the context holds.
         placed: usize,
     },
+    /// A `configuration_update` was paired with a model other than Astra.
+    ConfigurationUpdateRequiresAstra {
+        /// The incompatible model's wire identifier.
+        model: &'static str,
+    },
+    /// Astra Pro mode does not accept mid-conversation configuration changes.
+    ConfigurationUpdateRequiresStandardMode,
+    /// Two updates touched in the history, which the API rejects.
+    AdjacentConfigurationUpdates,
+    /// Automatic compaction cannot preserve configuration updates.
+    ConfigurationUpdateWithAutomaticCompaction,
+    /// Automatic truncation cannot preserve configuration updates.
+    ConfigurationUpdateWithAutomaticTruncation,
 }
 
 impl std::fmt::Display for RequestError {
@@ -126,6 +139,21 @@ impl std::fmt::Display for RequestError {
             }
             RequestError::ExplicitBreakpointsUnsupported { model, placed } => {
                 write!(f, "{model} ignores explicit cache breakpoints, but {placed} are placed")
+            }
+            RequestError::ConfigurationUpdateRequiresAstra { model } => {
+                write!(f, "configuration_update requires gpt-6-astra, not {model}")
+            }
+            RequestError::ConfigurationUpdateRequiresStandardMode => {
+                write!(f, "configuration_update requires Astra standard mode")
+            }
+            RequestError::AdjacentConfigurationUpdates => {
+                write!(f, "adjacent configuration_update items are refused")
+            }
+            RequestError::ConfigurationUpdateWithAutomaticCompaction => {
+                write!(f, "configuration_update cannot be combined with automatic compaction")
+            }
+            RequestError::ConfigurationUpdateWithAutomaticTruncation => {
+                write!(f, "configuration_update cannot be combined with automatic truncation")
             }
         }
     }
@@ -263,6 +291,32 @@ pub struct Request<'a> {
     pub background: bool,
 }
 
+fn validate_configuration_updates(
+    context: &Context,
+    prefix: &PrefixSettings,
+    truncation: Option<Truncation>,
+) -> Result<(), RequestError> {
+    if context.configuration_update_count() == 0 {
+        return Ok(());
+    }
+    let crate::model::Model::Gpt6Astra(astra) = &prefix.model else {
+        return Err(RequestError::ConfigurationUpdateRequiresAstra { model: prefix.model.api_id() });
+    };
+    if astra.mode == Some(crate::values::ReasoningMode::Pro) {
+        return Err(RequestError::ConfigurationUpdateRequiresStandardMode);
+    }
+    if context.has_adjacent_configuration_updates() {
+        return Err(RequestError::AdjacentConfigurationUpdates);
+    }
+    if prefix.context_management.is_some() {
+        return Err(RequestError::ConfigurationUpdateWithAutomaticCompaction);
+    }
+    if truncation == Some(Truncation::Auto) {
+        return Err(RequestError::ConfigurationUpdateWithAutomaticTruncation);
+    }
+    Ok(())
+}
+
 impl<'a> Request<'a> {
     /// The single construction path, so its checks cannot be skipped.
     ///
@@ -278,6 +332,7 @@ impl<'a> Request<'a> {
         if placed > budget.explicit_slots {
             return Err(RequestError::TooManyExplicitBreakpoints { placed, budget: budget.explicit_slots });
         }
+        validate_configuration_updates(context, &prefix, None)?;
         Ok(Self {
             context,
             prefix,
@@ -443,9 +498,10 @@ impl<'a> Request<'a> {
     }
 
     /// Choose what an over-long input does.
-    pub fn with_truncation(mut self, truncation: Truncation) -> Self {
+    pub fn with_truncation(mut self, truncation: Truncation) -> Result<Self, RequestError> {
+        validate_configuration_updates(self.context, &self.prefix, Some(truncation))?;
         self.truncation = Some(truncation);
-        self
+        Ok(self)
     }
 
     /// Leave the documented default, which fails an over-long input outright.

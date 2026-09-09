@@ -104,6 +104,7 @@ reqwest::Client::new()
 | `max` effort on a model that refuses it | `EffortNoneToMax` and `EffortNoneToXhigh` are different types |
 | `none` effort on GPT-6 Astra | Astra takes `EffortLowToMax`, which has no `None` variant |
 | Dropping `async` while replaying a function call | `CalledFunction::asynchronous` is copied by `Context::push_called_function` |
+| An invalid Astra `configuration_update` combination | `Request::new` and `with_truncation` return a named `RequestError` |
 | `prompt_cache_options` and `prompt_cache_retention` together | one `match` on the model produces exactly one of them |
 | A fifth cache breakpoint | `BreakpointSlot` has four variants |
 | A fourth explicit breakpoint under `implicit` mode | `Request::new` returns `TooManyExplicitBreakpoints` — OpenAI's own breakpoint takes one of the four writes |
@@ -208,7 +209,11 @@ long-context and service-tier adjustments its exact arithmetic excludes.
 
 GPT-6 Astra has its own `EffortLowToMax`, so `none` does not compile. Function
 tools can state `async: true` without losing that flag when the returned call is
-decoded and replayed.
+decoded and replayed. A `configuration_update` is an append-only input item;
+request validation rejects the combinations the API rejects: another model,
+Astra Pro mode, adjacent updates, automatic compaction, or automatic truncation.
+A live two-turn capture read 3,134 cached tokens after appending an effort update,
+showing that the prior prompt bytes stayed reusable.
 
 ## Reading the stream back
 

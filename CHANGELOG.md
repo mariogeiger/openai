@@ -10,6 +10,19 @@ and the working instructions. 0.5.0 split it into `SOUL.md` and `AGENTS.md`; the
 older references are left as they were written, because a changelog records what
 was true at the time.
 
+## [0.9.0] — 2026-09-09
+
+- Added append-only `configuration_update` input items for Astra reasoning
+  effort. Requests reject non-Astra and Pro use, adjacent updates, automatic
+  compaction, and automatic truncation. Live gateway captures cover ordinary,
+  maximum-effort, Pro, and update flows.
+- A live cache test wrote 3,134 prefix tokens, then appended a `high` effort
+  update and read all 3,134 while writing only 19 new tokens.
+- `Request::with_truncation` now returns `Result`. **Migration:** add `?` or
+  otherwise handle `ConfigurationUpdateWithAutomaticTruncation`.
+
+  `openai` is now 0.9.0.
+
 ## [0.8.0] — 2026-09-09
 
 - Function declarations can emit optional `async`, and returned function calls
@@ -29,7 +42,8 @@ was true at the time.
   base input / cached-read / cache-write / output prices. The existing `Pricing`
   caveat still excludes the surcharge above 272K input and service-tier changes.
 - `ModelId::default_effort` now returns `Option<ReasoningEffort>` because Astra's
-  model page names no default.
+  model page names no default. **Migration:** compare against `Some(effort)` for
+  models that publish a default, and `None` for Astra.
 
   `openai` is now 0.7.0.
 

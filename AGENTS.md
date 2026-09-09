@@ -115,9 +115,10 @@ left to be rediscovered. Priority is by what a real consumer needs.
    map whose values are strings or input blocks. Server-side content the caller
    does not see, so its prefix implications need measuring before it is modeled.
 3. **The remaining input item kinds.** The request side models messages, function
-   calls, function outputs, and replayed reasoning. The reference lists 32 item
-   kinds; the rest are hosted-tool calls and their outputs, plus `item_reference`
-   and the compaction items. Model them alongside the tool whose calls they are.
+   calls, function outputs, replayed reasoning, and configuration updates. The
+   reference lists 32 item kinds; the rest are hosted-tool calls and their
+   outputs, plus `item_reference` and the compaction items. Model them alongside
+   the tool whose calls they are.
 4. **`moderation`.** A model name plus per-direction `score` or `block` policies.
 5. **Five shell-call streaming events.** Their payload is a structured command
    list a caller running commands has to agree with exactly; model it with the

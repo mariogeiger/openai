@@ -11,7 +11,9 @@
 
 use openai::content::InputBlock;
 use openai::context::{BreakpointSlot, CACHE_WRITE_SLOTS, Context};
-use openai::model::{EffortMediumToXhigh, EffortNoneToMax, EffortNoneToXhigh, Gpt5_6, Gpt5_6Tier, Model};
+use openai::model::{
+    EffortLowToMax, EffortMediumToXhigh, EffortNoneToMax, EffortNoneToXhigh, Gpt5_6, Gpt5_6Tier, Model,
+};
 use openai::prefix::{PrefixSettings, TextFormat};
 use openai::request::{CacheWriteBudget, Request, RequestError, UncacheableInstructions};
 use openai::tools::{AllowedToolsMode, FunctionTool, ToolChoice};
@@ -541,6 +543,7 @@ fn each_per_call_field_goes_on_and_comes_off_the_wire() {
         .with_metadata(metadata)
         .with_safety_identifier("sha256:abc")
         .with_truncation(Truncation::Auto)
+        .unwrap()
         .with_max_tool_calls(3)
         .in_background();
     let value = serde_json::to_value(&asked).unwrap();
@@ -587,4 +590,47 @@ fn empty_metadata_is_absence() {
         .unwrap()
         .with_metadata(Metadata::new(Vec::<(String, String)>::new()).unwrap());
     assert!(serde_json::to_value(&request).unwrap().get("metadata").is_none());
+}
+
+#[test]
+fn configuration_update_serializes_in_the_append_only_input() {
+    let mut context = Context::new(vec![]);
+    context.push_user_text("easy");
+    context.push_configuration_update(EffortLowToMax::High);
+    context.push_user_text("hard");
+    let value = body(&context, PrefixSettings::new(Model::gpt_6_astra().with_effort(EffortLowToMax::Low)));
+    assert_eq!(value["input"][1], json!({"type": "configuration_update", "reasoning": {"effort": "high"}}));
+    assert_eq!(value["reasoning"]["effort"], "low", "the request-level effort remains unchanged");
+}
+
+#[test]
+fn configuration_update_restrictions_are_checked_before_serialization() {
+    let mut one = Context::new(vec![]);
+    one.push_configuration_update(EffortLowToMax::High);
+    one.push_user_text("continue");
+
+    assert!(matches!(
+        Request::new(&one, PrefixSettings::new(Model::gpt_5_6_sol())),
+        Err(RequestError::ConfigurationUpdateRequiresAstra { model: "gpt-5.6-sol" })
+    ));
+    assert!(matches!(
+        Request::new(&one, PrefixSettings::new(Model::gpt_6_astra().with_mode(openai::values::ReasoningMode::Pro))),
+        Err(RequestError::ConfigurationUpdateRequiresStandardMode)
+    ));
+    assert!(matches!(
+        Request::new(&one, PrefixSettings::new(Model::gpt_6_astra()).with_compaction(Some(100_000))),
+        Err(RequestError::ConfigurationUpdateWithAutomaticCompaction)
+    ));
+    assert!(matches!(
+        Request::new(&one, PrefixSettings::new(Model::gpt_6_astra())).unwrap().with_truncation(Truncation::Auto),
+        Err(RequestError::ConfigurationUpdateWithAutomaticTruncation)
+    ));
+
+    let mut adjacent = Context::new(vec![]);
+    adjacent.push_configuration_update(EffortLowToMax::Low);
+    adjacent.push_configuration_update(EffortLowToMax::High);
+    assert!(matches!(
+        Request::new(&adjacent, PrefixSettings::new(Model::gpt_6_astra())),
+        Err(RequestError::AdjacentConfigurationUpdates)
+    ));
 }

@@ -1,0 +1,62 @@
+{
+  "background": false,
+  "input": [
+    {
+      "content": [
+        {
+          "text": "Reply with exactly INITIAL_OK.",
+          "type": "input_text"
+        }
+      ],
+      "role": "user",
+      "type": "message"
+    },
+    {
+      "content": [
+        {
+          "text": "INITIAL_OK",
+          "type": "output_text"
+        }
+      ],
+      "phase": "final_answer",
+      "role": "assistant",
+      "type": "message"
+    },
+    {
+      "reasoning": {
+        "effort": "high"
+      },
+      "type": "configuration_update"
+    },
+    {
+      "content": [
+        {
+          "text": "Analyze 2+2, then reply with exactly UPDATED_OK.",
+          "type": "input_text"
+        }
+      ],
+      "role": "user",
+      "type": "message"
+    }
+  ],
+  "max_output_tokens": 2048,
+  "model": "gpt-6-astra",
+  "parallel_tool_calls": true,
+  "prompt_cache_options": {
+    "mode": "implicit",
+    "ttl": "30m"
+  },
+  "reasoning": {
+    "context": "auto",
+    "effort": "low"
+  },
+  "store": true,
+  "stream": true,
+  "text": {
+    "format": {
+      "type": "text"
+    },
+    "verbosity": "medium"
+  },
+  "tool_choice": "auto"
+}
