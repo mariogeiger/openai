@@ -146,6 +146,7 @@ fn a_settled_stream_feeds_the_next_turn_without_reserializing_arguments() {
         call_id: call.call_id.clone(),
         name: call.name.clone(),
         arguments: call.arguments.as_str().to_owned(),
+        asynchronous: None,
     };
     assert_eq!(replayed.arguments, r#"{"path":"src/lib.rs"}"#, "the model's own bytes, not a re-serialization");
     let _: InputItem = InputItem::FunctionCall(replayed);

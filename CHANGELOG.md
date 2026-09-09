@@ -10,6 +10,16 @@ and the working instructions. 0.5.0 split it into `SOUL.md` and `AGENTS.md`; the
 older references are left as they were written, because a changelog records what
 was true at the time.
 
+## [0.8.0] — 2026-09-09
+
+- Function declarations can emit optional `async`, and returned function calls
+  decode and replay the same optional boolean. Omission remains distinct because
+  the reference documents no default.
+- SSE framing consumes OpenAI's final `[DONE]` sentinel rather than attempting
+  to decode it as JSON.
+
+  `openai` is now 0.8.0.
+
 ## [0.7.0] — 2026-09-09
 
 - Added GPT-6 Astra as `Model::gpt_6_astra()`, with its exact `low` through

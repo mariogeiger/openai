@@ -282,6 +282,17 @@ impl Context {
             call_id: call_id.into(),
             name: name.into(),
             arguments: arguments.into(),
+            asynchronous: None,
+        }));
+    }
+
+    /// Replay a decoded function call without dropping its `async` choice.
+    pub fn push_called_function(&mut self, call: &crate::items::CalledFunction) {
+        self.items.push(InputItem::FunctionCall(FunctionCall {
+            call_id: call.call_id.clone(),
+            name: call.name.clone(),
+            arguments: call.arguments.as_str().to_owned(),
+            asynchronous: call.asynchronous,
         }));
     }
 

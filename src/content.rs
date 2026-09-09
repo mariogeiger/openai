@@ -359,6 +359,9 @@ pub struct FunctionCall {
     /// on replay. Re-serializing a parsed value could reorder keys or change
     /// spacing and break the prefix.
     pub arguments: String,
+    /// Whether this call let the model continue before its result arrived.
+    /// `None` preserves an omitted wire field rather than inventing a default.
+    pub asynchronous: Option<bool>,
 }
 
 /// The result of a function call, fed back for the next turn.
@@ -594,6 +597,8 @@ struct FunctionCallWire<'a> {
     call_id: &'a str,
     name: &'a str,
     arguments: &'a str,
+    #[serde(rename = "async", skip_serializing_if = "Option::is_none")]
+    asynchronous: Option<bool>,
 }
 
 #[derive(Serialize)]
@@ -637,10 +642,14 @@ impl Serialize for InputItem {
     fn serialize<S: serde::Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {
         match self {
             InputItem::Message(m) => m.serialize(s),
-            InputItem::FunctionCall(c) => {
-                FunctionCallWire { kind: "function_call", call_id: &c.call_id, name: &c.name, arguments: &c.arguments }
-                    .serialize(s)
+            InputItem::FunctionCall(c) => FunctionCallWire {
+                kind: "function_call",
+                call_id: &c.call_id,
+                name: &c.name,
+                arguments: &c.arguments,
+                asynchronous: c.asynchronous,
             }
+            .serialize(s),
             InputItem::FunctionCallOutput(o) => FunctionCallOutputWire {
                 kind: "function_call_output",
                 call_id: &o.call_id,
@@ -769,6 +778,7 @@ mod tests {
             call_id: "call_1".into(),
             name: "read_file".into(),
             arguments: r#"{"path":"a.rs"}"#.into(),
+            asynchronous: None,
         });
         assert_eq!(
             serde_json::to_value(&item).unwrap(),
@@ -815,6 +825,7 @@ mod tests {
             call_id: "call_1".into(),
             name: "f".into(),
             arguments: "{}".into(),
+            asynchronous: None,
         });
         assert_eq!(call.last_breakpoint_site(), None);
 

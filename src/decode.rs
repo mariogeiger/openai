@@ -264,6 +264,7 @@ pub(crate) fn output_item(item: &Value) -> Result<OutputItem, FrameError> {
             call_id: require_str(item, "call_id")?.to_owned(),
             name: require_str(item, "name")?.to_owned(),
             arguments: FunctionArguments::from_wire(optional_string(item, "arguments").unwrap_or_default()),
+            asynchronous: item.get("async").and_then(Value::as_bool),
         }),
         "reasoning" => OutputItem::Reasoning(ReasoningItem {
             id: require_str(item, "id")?.to_owned(),

@@ -103,6 +103,7 @@ reqwest::Client::new()
 | A cache breakpoint on a refusal | `Refusal` has no breakpoint field; the API answers `Unknown parameter` to one |
 | `max` effort on a model that refuses it | `EffortNoneToMax` and `EffortNoneToXhigh` are different types |
 | `none` effort on GPT-6 Astra | Astra takes `EffortLowToMax`, which has no `None` variant |
+| Dropping `async` while replaying a function call | `CalledFunction::asynchronous` is copied by `Context::push_called_function` |
 | `prompt_cache_options` and `prompt_cache_retention` together | one `match` on the model produces exactly one of them |
 | A fifth cache breakpoint | `BreakpointSlot` has four variants |
 | A fourth explicit breakpoint under `implicit` mode | `Request::new` returns `TooManyExplicitBreakpoints` — OpenAI's own breakpoint takes one of the four writes |
@@ -205,7 +206,9 @@ context window, knowledge cutoff, minimum cacheable prefix, and exact base
 per-token pricing including cache reads and writes. `Pricing` documents the
 long-context and service-tier adjustments its exact arithmetic excludes.
 
-GPT-6 Astra has its own `EffortLowToMax`, so `none` does not compile.
+GPT-6 Astra has its own `EffortLowToMax`, so `none` does not compile. Function
+tools can state `async: true` without losing that flag when the returned call is
+decoded and replayed.
 
 ## Reading the stream back
 

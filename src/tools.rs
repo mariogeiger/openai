@@ -38,6 +38,8 @@ pub struct FunctionTool {
     description: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     strict: Option<bool>,
+    #[serde(rename = "async", skip_serializing_if = "Option::is_none")]
+    asynchronous: Option<bool>,
 }
 
 impl FunctionTool {
@@ -53,7 +55,7 @@ impl FunctionTool {
     /// A tool's bytes are the start of the hashed prefix, so this is a choice
     /// worth making once and reading back.
     pub fn new(name: impl Into<String>, parameters: Value) -> Self {
-        Self { kind: "function", name: name.into(), parameters, description: None, strict: None }
+        Self { kind: "function", name: name.into(), parameters, description: None, strict: None, asynchronous: None }
     }
 
     /// Add the description the model reads when deciding whether to call this.
@@ -80,6 +82,26 @@ impl FunctionTool {
     /// schema allows it and fall back where it does not.
     pub fn with_inferred_argument_strictness(mut self) -> Self {
         self.strict = None;
+        self
+    }
+
+    /// Let the model keep working while the application computes this tool's
+    /// result. The matching call item carries `async: true` for replay.
+    pub fn with_async(mut self) -> Self {
+        self.asynchronous = Some(true);
+        self
+    }
+
+    /// Require this tool's result in the next response creation.
+    pub fn with_synchronous_result(mut self) -> Self {
+        self.asynchronous = Some(false);
+        self
+    }
+
+    /// Send no `async` choice. The reference gives no default, so omission is
+    /// kept distinct from either explicit boolean value.
+    pub fn without_async_choice(mut self) -> Self {
+        self.asynchronous = None;
         self
     }
 }

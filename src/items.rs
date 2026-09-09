@@ -74,6 +74,9 @@ pub struct CalledFunction {
     pub name: String,
     /// The arguments, undecoded.
     pub arguments: FunctionArguments,
+    /// Whether the model kept working before this call's result arrived.
+    /// `None` means the provider omitted the field.
+    pub asynchronous: Option<bool>,
 }
 
 /// A reasoning item from the response.

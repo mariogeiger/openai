@@ -1,0 +1,59 @@
+{
+  "background": false,
+  "input": [
+    {
+      "content": [
+        {
+          "text": "Start get_number with label async, then say ASYNC_STARTED without waiting for its result.",
+          "type": "input_text"
+        }
+      ],
+      "role": "user",
+      "type": "message"
+    }
+  ],
+  "max_output_tokens": 2048,
+  "model": "gpt-6-astra",
+  "parallel_tool_calls": true,
+  "prompt_cache_options": {
+    "mode": "implicit",
+    "ttl": "30m"
+  },
+  "reasoning": {
+    "context": "auto",
+    "effort": "low"
+  },
+  "store": true,
+  "stream": true,
+  "text": {
+    "format": {
+      "type": "text"
+    },
+    "verbosity": "medium"
+  },
+  "tool_choice": {
+    "name": "get_number",
+    "type": "function"
+  },
+  "tools": [
+    {
+      "async": true,
+      "description": "Return the fixed number for a label.",
+      "name": "get_number",
+      "parameters": {
+        "additionalProperties": false,
+        "properties": {
+          "label": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "label"
+        ],
+        "type": "object"
+      },
+      "strict": true,
+      "type": "function"
+    }
+  ]
+}

@@ -94,8 +94,9 @@ impl std::error::Error for FrameError {
 /// The value of a `data:` field, for one line of an SSE body.
 ///
 /// `None` for everything else a stream contains — the `event:` line that names
-/// the type redundantly, comment lines, and the blank line that ends a frame —
-/// so a caller can pass every line through and act on what comes back.
+/// the type redundantly, comment lines, the blank line that ends a frame, and
+/// OpenAI's final `[DONE]` sentinel — so a caller can pass every line through
+/// and act only on JSON event payloads.
 ///
 /// Per the SSE grammar one optional space after the colon is part of the
 /// framing, not the data, and is removed. OpenAI sends each event as a single
@@ -103,7 +104,8 @@ impl std::error::Error for FrameError {
 /// rejoined with newlines by the caller before decoding.
 pub fn data_payload(line: &str) -> Option<&str> {
     let rest = line.strip_prefix("data:")?;
-    Some(rest.strip_prefix(' ').unwrap_or(rest))
+    let payload = rest.strip_prefix(' ').unwrap_or(rest);
+    (payload != "[DONE]").then_some(payload)
 }
 
 // ── Which stream a piece of text belongs to ──────────────────────────────────

@@ -23,6 +23,7 @@ fn only_data_lines_carry_a_payload() {
     assert_eq!(data_payload("data:{\"type\":\"x\"}"), Some("{\"type\":\"x\"}"), "the space is optional");
     assert_eq!(data_payload("data:  two spaces"), Some(" two spaces"), "only one space is framing");
     assert_eq!(data_payload("event: response.completed"), None);
+    assert_eq!(data_payload("data: [DONE]"), None);
     assert_eq!(data_payload(": keep-alive comment"), None);
     assert_eq!(data_payload(""), None);
 }
@@ -117,7 +118,7 @@ fn a_function_call_item_keeps_its_arguments_as_bytes() {
         "type": "response.output_item.done", "output_index": 1, "sequence_number": 12,
         "item": {
             "type": "function_call", "id": "fc_1", "call_id": "call_abc", "name": "read_file",
-            "arguments": "{\"path\":\"src/lib.rs\"}", "status": "completed"
+            "arguments": "{\"path\":\"src/lib.rs\"}", "async": true, "status": "completed"
         }
     }))
     .unwrap();
@@ -128,6 +129,7 @@ fn a_function_call_item_keeps_its_arguments_as_bytes() {
     assert_eq!(call.name, "read_file");
     assert_eq!(call.arguments.as_str(), r#"{"path":"src/lib.rs"}"#);
     assert_eq!(call.arguments.decode().unwrap(), json!({"path": "src/lib.rs"}));
+    assert_eq!(call.asynchronous, Some(true));
 }
 
 /// Malformed arguments stay readable and stay malformed. The bytes survive
