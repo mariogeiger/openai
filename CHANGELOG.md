@@ -10,6 +10,18 @@ and the working instructions. 0.5.0 split it into `SOUL.md` and `AGENTS.md`; the
 older references are left as they were written, because a changelog records what
 was true at the time.
 
+## [0.10.0] - 2026-09-23
+
+### Added
+
+- Native GPT-6 Sol parameters, all six reasoning efforts, cache controls,
+  documented limits, medium default effort, and exact OpenAI list prices.
+
+### Changed
+
+- `Model` and `ModelId` gain `Gpt6Sol` variants. Exhaustive downstream matches
+  must cover the new identity; existing constructors keep their behavior.
+
 ## [0.9.0] — 2026-09-09
 
 - Added append-only `configuration_update` input items for Astra reasoning

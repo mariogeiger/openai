@@ -201,17 +201,20 @@ URL.
 
 ## Modeled
 
-`gpt-6-astra`, `gpt-5.6-sol`, `gpt-5.6-terra`, `gpt-5.6-luna`, `gpt-5.5`,
+`gpt-6-astra`, `gpt-6-sol`, `gpt-5.6-sol`, `gpt-5.6-terra`, `gpt-5.6-luna`, `gpt-5.5`,
 `gpt-5.5-pro`, `gpt-5.4`. Each carries its maximum input and output sizes,
 context window, knowledge cutoff, minimum cacheable prefix, and exact base
 per-token pricing including cache reads and writes. `Pricing` documents the
 long-context and service-tier adjustments its exact arithmetic excludes.
 
+GPT-6 Sol accepts `EffortNoneToMax` and documents `medium` as its default;
+`Model::gpt_6_sol()` leaves the effort unset until the caller chooses one.
 GPT-6 Astra has its own `EffortLowToMax`, so `none` does not compile. Function
 tools can state `async: true` without losing that flag when the returned call is
-decoded and replayed. A `configuration_update` is an append-only input item;
-request validation rejects the combinations the API rejects: another model,
-Astra Pro mode, adjacent updates, automatic compaction, or automatic truncation.
+decoded and replayed. The crate currently models append-only
+`configuration_update` items for Astra only. Request validation rejects other
+models, Astra Pro mode, adjacent updates, automatic compaction, or automatic
+truncation.
 A live two-turn capture read 3,134 cached tokens after appending an effort update,
 showing that the prior prompt bytes stayed reusable.
 

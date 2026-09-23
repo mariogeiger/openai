@@ -62,6 +62,10 @@ impl CacheWriteBudget {
     /// The budget a model and its caching mode allow.
     pub fn of(model: &Model) -> Self {
         match model {
+            Model::Gpt6Sol(m) => match m.caching.mode {
+                CacheMode::Implicit => Self { explicit_slots: CACHE_WRITE_SLOTS - 1, implicit_breakpoint: true },
+                CacheMode::Explicit => Self { explicit_slots: CACHE_WRITE_SLOTS, implicit_breakpoint: false },
+            },
             Model::Gpt6Astra(m) => match m.caching.mode {
                 CacheMode::Implicit => Self { explicit_slots: CACHE_WRITE_SLOTS - 1, implicit_breakpoint: true },
                 CacheMode::Explicit => Self { explicit_slots: CACHE_WRITE_SLOTS, implicit_breakpoint: false },

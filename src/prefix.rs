@@ -250,6 +250,14 @@ impl PrefixSettings {
                 crate::model::EffortLowToMax::Xhigh => ReasoningEffort::Xhigh,
                 crate::model::EffortLowToMax::Max => ReasoningEffort::Max,
             }),
+            Model::Gpt6Sol(m) => m.effort.map(|e| match e {
+                Six::None => ReasoningEffort::None,
+                Six::Low => ReasoningEffort::Low,
+                Six::Medium => ReasoningEffort::Medium,
+                Six::High => ReasoningEffort::High,
+                Six::Xhigh => ReasoningEffort::Xhigh,
+                Six::Max => ReasoningEffort::Max,
+            }),
             Model::Gpt5_6(m) => m.effort.map(|e| match e {
                 Six::None => ReasoningEffort::None,
                 Six::Low => ReasoningEffort::Low,
