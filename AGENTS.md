@@ -145,3 +145,6 @@ An HTTP client, an async runtime, SSE transport, retries, reconnection.
 - Preserve unrelated concurrent changes; inspect the working tree again before
   merging.
 - The repository is public. Push only with the owner's authority.
+- Name no gateway: not its operator, its host, the platform behind it, or the
+  model identifiers it routes. Write "a gateway" and `gateway/<model>`, in code,
+  fixtures, documentation, and commit messages alike.
