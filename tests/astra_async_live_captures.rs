@@ -67,7 +67,7 @@ fn async_function_call_is_decoded_and_replayed() {
     assert!(matches!(called.items.first(), Some(OutputItem::FunctionCall(_))));
     assert!(matches!(called.items.get(1), Some(OutputItem::Message { text, .. }) if text == "ASYNC_STARTED"));
 
-    let mut replay = Context::new(vec![FunctionTool::new("get_number", json!({"type": "object"})).with_async()]);
+    let mut replay = Context::new(vec![FunctionTool::new("get_number", json!({"type": "object"})).with_async().into()]);
     replay.push_called_function(call);
     let replayed = serde_json::to_value(
         Request::new(&replay, PrefixSettings::new(Model::gpt_6_astra().with_effort(EffortLowToMax::Low))).unwrap(),

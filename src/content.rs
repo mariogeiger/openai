@@ -426,6 +426,8 @@ pub enum InputItem {
     Reasoning(ReplayedReasoning),
     /// An Astra reasoning change that remains in effect for later items.
     ConfigurationUpdate(ConfigurationUpdate),
+    /// A web search the model ran in an earlier response.
+    WebSearchCall(crate::web_search::WebSearchCall),
 }
 
 impl InputItem {
@@ -442,7 +444,10 @@ impl InputItem {
                 FunctionOutput::Blocks(blocks) => last_breakpoint_site(blocks),
                 FunctionOutput::Text(_) => None,
             },
-            InputItem::FunctionCall(_) | InputItem::Reasoning(_) | InputItem::ConfigurationUpdate(_) => None,
+            InputItem::FunctionCall(_)
+            | InputItem::Reasoning(_)
+            | InputItem::ConfigurationUpdate(_)
+            | InputItem::WebSearchCall(_) => None,
         }
     }
 
@@ -455,7 +460,10 @@ impl InputItem {
                 FunctionOutput::Blocks(blocks) => blocks.get_mut(block)?.breakpoint_site_mut(),
                 FunctionOutput::Text(_) => None,
             },
-            InputItem::FunctionCall(_) | InputItem::Reasoning(_) | InputItem::ConfigurationUpdate(_) => None,
+            InputItem::FunctionCall(_)
+            | InputItem::Reasoning(_)
+            | InputItem::ConfigurationUpdate(_)
+            | InputItem::WebSearchCall(_) => None,
         }
     }
 
@@ -472,7 +480,10 @@ impl InputItem {
                 FunctionOutput::Blocks(blocks) => breakpoint_count(blocks),
                 FunctionOutput::Text(_) => 0,
             },
-            InputItem::FunctionCall(_) | InputItem::Reasoning(_) | InputItem::ConfigurationUpdate(_) => 0,
+            InputItem::FunctionCall(_)
+            | InputItem::Reasoning(_)
+            | InputItem::ConfigurationUpdate(_)
+            | InputItem::WebSearchCall(_) => 0,
         }
     }
 }
@@ -686,6 +697,7 @@ impl Serialize for InputItem {
     fn serialize<S: serde::Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {
         match self {
             InputItem::Message(m) => m.serialize(s),
+            InputItem::WebSearchCall(call) => call.serialize(s),
             InputItem::FunctionCall(c) => FunctionCallWire {
                 kind: "function_call",
                 call_id: &c.call_id,

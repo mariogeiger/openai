@@ -1,5 +1,5 @@
-//! Function tools, and the `tool_choice` that varies availability without
-//! disturbing them.
+//! The `tools` array — function tools and hosted tools in one list — and the
+//! `tool_choice` that varies availability without disturbing it.
 //!
 //! The tool array is the first thing OpenAI hashes after its own hidden
 //! content, so it is the first bytes of the prefix. Measured live: an unchanged
@@ -15,8 +15,54 @@
 //! and [`AllowedTools`] can only be built from it.
 
 use crate::values::api_enum;
+use crate::web_search::WebSearchTool;
 use serde::Serialize;
 use serde_json::Value;
+
+/// One entry of the `tools` array.
+///
+/// A sum type because the array is one: function tools and hosted tools sit in
+/// a single ordered list, and the order is part of the hashed prefix. Only the
+/// hosted tools this crate models appear here.
+#[derive(Debug, PartialEq)]
+pub enum Tool {
+    /// A function the caller runs and answers with a `function_call_output`.
+    Function(FunctionTool),
+    /// OpenAI's web search, run inside the response.
+    WebSearch(WebSearchTool),
+}
+
+impl From<FunctionTool> for Tool {
+    fn from(tool: FunctionTool) -> Self {
+        Self::Function(tool)
+    }
+}
+
+impl From<WebSearchTool> for Tool {
+    fn from(tool: WebSearchTool) -> Self {
+        Self::WebSearch(tool)
+    }
+}
+
+impl Serialize for Tool {
+    fn serialize<S: serde::Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {
+        match self {
+            Self::Function(tool) => tool.serialize(s),
+            Self::WebSearch(tool) => tool.serialize(s),
+        }
+    }
+}
+
+impl Tool {
+    /// The function's name, for the entries that have one. A hosted tool is
+    /// named by its type instead, and cannot be listed in [`AllowedTools`].
+    pub fn function_name(&self) -> Option<&str> {
+        match self {
+            Self::Function(tool) => Some(&tool.name),
+            Self::WebSearch(_) => None,
+        }
+    }
+}
 
 /// A function the model may call.
 ///

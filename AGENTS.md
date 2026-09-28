@@ -22,7 +22,8 @@
 | `src/context.rs` | append-only conversation state, the frozen tool array, breakpoint slots |
 | `src/prefix.rs` | per-call settings that are *inside* the hashed prefix |
 | `src/request.rs` | per-call settings outside the prefix, validation, body serialization |
-| `src/tools.rs` | function tools and `tool_choice` |
+| `src/tools.rs` | the `tools` array's entries, function tools, and `tool_choice` |
+| `src/web_search.rs` | the web search tool definition, and its call item in both directions |
 | `src/stream.rs` | one streamed frame becomes one typed event |
 | `src/settle.rs` | a sequence of events becomes a finished response |
 | `src/response.rs` | the non-streaming response body |
@@ -102,9 +103,9 @@ shape is in doubt, capture it.
 The mission is whole coverage, so what is missing is written down rather than
 left to be rediscovered. Priority is by what a real consumer needs.
 
-1. **Hosted-tool definitions.** Their events and call items decode; the
-   request-side definitions that turn them on do not exist. 15 tool types, each
-   with its own configuration: `web_search`, `file_search`, `code_interpreter`,
+1. **Hosted-tool definitions.** Their events and call items decode; `web_search`
+   is declarable and its calls replay. The other request-side definitions do not
+   exist yet, each with its own configuration: `file_search`, `code_interpreter`,
    `image_generation`, `mcp`, `shell`, `local_shell`, `computer_use_preview`,
    `apply_patch`, `custom`, `tool_search`, `namespace`, `programmatic_tool_calling`,
    `additional_tools`, `web_search_preview`. The highest-value first, and each is
@@ -115,7 +116,8 @@ left to be rediscovered. Priority is by what a real consumer needs.
    map whose values are strings or input blocks. Server-side content the caller
    does not see, so its prefix implications need measuring before it is modeled.
 3. **The remaining input item kinds.** The request side models messages, function
-   calls, function outputs, replayed reasoning, and configuration updates. The
+   calls, function outputs, replayed reasoning, configuration updates, and web
+   search calls. The
    reference lists 32 item kinds; the rest are hosted-tool calls and their
    outputs, plus `item_reference` and the compaction items. Model them alongside
    the tool whose calls they are.

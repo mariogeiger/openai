@@ -23,7 +23,7 @@ use crate::content::{
     PromptCacheBreakpoint, ReplayedReasoning,
 };
 use crate::model::EffortLowToMax;
-use crate::tools::{AllowedTools, AllowedToolsError, AllowedToolsMode, FunctionTool};
+use crate::tools::{AllowedTools, AllowedToolsError, AllowedToolsMode, Tool};
 use crate::values::{AssistantPhase, InputRole};
 
 /// How many breakpoints a request may write. The API's hard ceiling, and hence
@@ -148,7 +148,7 @@ impl std::error::Error for BreakpointError {}
 /// [`Request`](crate::request::Request), which borrows this.
 #[derive(Debug)]
 pub struct Context {
-    tools: Vec<FunctionTool>,
+    tools: Vec<Tool>,
     items: Vec<InputItem>,
     slots: [Option<SlotState>; CACHE_WRITE_SLOTS],
 }
@@ -160,7 +160,7 @@ impl Context {
     /// bytes of the prefix and costs every cached token. Pass an empty vector
     /// for a conversation with no tools; the `tools` field is then omitted
     /// rather than sent empty, since `[]` and absent render differently.
-    pub fn new(tools: Vec<FunctionTool>) -> Self {
+    pub fn new(tools: Vec<Tool>) -> Self {
         Self { tools, items: Vec::new(), slots: [None; CACHE_WRITE_SLOTS] }
     }
 
@@ -184,10 +184,10 @@ impl Context {
     /// use openai::tools::FunctionTool;
     /// use serde_json::json;
     ///
-    /// let mut context = Context::new(vec![FunctionTool::new("f", json!({}))]);
+    /// let mut context = Context::new(vec![FunctionTool::new("f", json!({})).into()]);
     /// context.tools_mut().pop();
     /// ```
-    pub fn tools(&self) -> &[FunctionTool] {
+    pub fn tools(&self) -> &[Tool] {
         &self.tools
     }
 
@@ -215,7 +215,7 @@ impl Context {
         }
         let mut allowed: Vec<String> = Vec::with_capacity(names.len());
         for name in names {
-            if !self.tools.iter().any(|t| t.name == *name) {
+            if !self.tools.iter().any(|t| t.function_name() == Some(*name)) {
                 return Err(AllowedToolsError::UnknownTool((*name).to_string()));
             }
             if allowed.iter().any(|a| a == name) {
@@ -333,6 +333,14 @@ impl Context {
     /// request-level effort that helped form the cached prefix.
     pub fn push_configuration_update(&mut self, effort: EffortLowToMax) {
         self.items.push(InputItem::ConfigurationUpdate(ConfigurationUpdate::reasoning_effort(effort)));
+    }
+
+    /// Replay a web search the model ran in an earlier response.
+    ///
+    /// A stateless conversation that drops it hands the model a history in
+    /// which its answer cites a search that never happened.
+    pub fn push_web_search_call(&mut self, call: crate::web_search::WebSearchCall) {
+        self.items.push(InputItem::WebSearchCall(call));
     }
 
     /// Append a reasoning item from an earlier response.
@@ -468,14 +476,18 @@ impl Context {
 mod tests {
     use super::*;
     use crate::content::{ImageSource, InputItem};
+    use crate::tools::FunctionTool;
     use crate::values::ImageDetail;
     use serde_json::json;
 
-    fn tools() -> Vec<FunctionTool> {
+    fn tools() -> Vec<Tool> {
         vec![
             FunctionTool::new("read_file", json!({"type": "object"})),
             FunctionTool::new("write_file", json!({"type": "object"})),
         ]
+        .into_iter()
+        .map(Tool::from)
+        .collect()
     }
 
     fn breakpoints(context: &Context) -> usize {

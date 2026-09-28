@@ -19,7 +19,7 @@ use crate::content::InputItem;
 use crate::model::Model;
 use crate::prefix::TextFormat;
 use crate::request::{Request, Transport};
-use crate::tools::{FunctionTool, ToolChoice};
+use crate::tools::{Tool, ToolChoice};
 use crate::values::{
     CacheMode, Include, Metadata, ReasoningEffort, ReasoningSummary, ServiceTier, Truncation, Verbosity,
 };
@@ -115,7 +115,7 @@ struct RequestWire<'a> {
     // from the parsed body — but writing the struct in prefix order keeps the
     // code readable against the guide's diagram.
     #[serde(skip_serializing_if = "Option::is_none")]
-    tools: Option<&'a [FunctionTool]>,
+    tools: Option<&'a [Tool]>,
     #[serde(skip_serializing_if = "Option::is_none")]
     instructions: Option<&'a str>,
     input: &'a [InputItem],

@@ -263,6 +263,41 @@ api_enum! {
     }
 }
 
+api_enum! {
+    /// How much of the context window web search results may fill before the
+    /// model answers.
+    ///
+    /// Guidance rather than a token count: it sets neither an exact size nor a
+    /// number of sources. `medium` is the documented default.
+    SearchContextSize {
+        /// Simple lookups.
+        Low => "low",
+        /// The balanced default.
+        Medium => "medium",
+        /// Answers that may need more detail from the results.
+        High => "high",
+    }
+}
+
+api_enum! { roundtrip
+    /// Where one web search call stands.
+    ///
+    /// Round-trips, because a call read off a response is replayed with its
+    /// status on the next request.
+    WebSearchCallStatus {
+        /// Started.
+        InProgress => "in_progress",
+        /// The search is running.
+        Searching => "searching",
+        /// Finished with results.
+        Completed => "completed",
+        /// The search failed.
+        Failed => "failed",
+        /// Stopped before it finished.
+        Incomplete => "incomplete",
+    }
+}
+
 api_enum! { roundtrip
     /// `service_tier`: which processing pool serves the request.
     ///

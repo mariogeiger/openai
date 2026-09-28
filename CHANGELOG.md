@@ -10,6 +10,38 @@ and the working instructions. 0.5.0 split it into `SOUL.md` and `AGENTS.md`; the
 older references are left as they were written, because a changelog records what
 was true at the time.
 
+## [0.11.0] - 2026-09-28
+
+### Added
+
+- `web_search::WebSearchTool`, the hosted web search tool definition, with
+  `external_web_access` and `search_context_size` always sent at their
+  documented defaults, and `filters.allowed_domains` and `user_location`
+  absent unless given. `UserLocation::unknown` is the documented way to stop
+  the United States fallback.
+- `web_search::WebSearchCall` reads a `web_search_call` output item
+  (`WebSearchCall::from_item`) and replays it as an input item
+  (`Context::push_web_search_call`, `InputItem::WebSearchCall`), with its
+  `search`, `open_page` or `find_in_page` action and any sources exactly as
+  they arrived. `is_search` says which calls are billed as searches.
+- `SearchContextSize` and `WebSearchCallStatus` join the wire vocabulary.
+
+### Changed
+
+- **Breaking.** The `tools` array holds `tools::Tool`, a sum of
+  `Tool::Function` and `Tool::WebSearch`, because function and hosted tools
+  share one ordered array whose order is part of the prefix.
+  `Context::new` takes `Vec<Tool>` and `Context::tools` returns `&[Tool]`.
+  `Context::allow_tools` still names function tools only.
+
+  Migrating from 0.10: convert each function tool with `.into()` (or
+  `Tool::from`), and read a name through `Tool::function_name`:
+
+  ```text
+  Context::new(vec![FunctionTool::new(..)])  → Context::new(vec![FunctionTool::new(..).into()])
+  context.tools()[0].name                    → context.tools()[0].function_name()
+  ```
+
 ## [0.10.0] - 2026-09-23
 
 ### Added

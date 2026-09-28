@@ -80,8 +80,8 @@
 //!
 //! // Tools are frozen here: the first bytes of the prefix can never drift.
 //! let tools = vec![
-//!     FunctionTool::new("read_file", json!({"type": "object"})),
-//!     FunctionTool::new("write_file", json!({"type": "object"})),
+//!     FunctionTool::new("read_file", json!({"type": "object"})).into(),
+//!     FunctionTool::new("write_file", json!({"type": "object"})).into(),
 //! ];
 //! let mut context = Context::new(tools);
 //!
@@ -195,6 +195,7 @@ pub mod stream;
 pub mod tools;
 pub mod usage;
 pub mod values;
+pub mod web_search;
 
 pub use values::*;
 

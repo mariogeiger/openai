@@ -57,8 +57,8 @@ use serde_json::json;
 
 // Tools are frozen at construction: the first bytes of the prefix cannot drift.
 let mut context = Context::new(vec![
-    FunctionTool::new("read_file", json!({"type": "object"})),
-    FunctionTool::new("write_file", json!({"type": "object"})),
+    FunctionTool::new("read_file", json!({"type": "object"})).into(),
+    FunctionTool::new("write_file", json!({"type": "object"})).into(),
 ]);
 
 // Reusable instructions live in a developer message, because top-level
@@ -317,10 +317,10 @@ No HTTP client, no async runtime, no SSE transport — you own the socket and ha
 this crate one `data:` payload at a time. No Chat Completions, and no other
 endpoint: one endpoint, covered whole.
 
-**Hosted-tool definitions.** Their *events* and *call items* decode, so a caller
-who enables one through a hand-written tool array can read what comes back. What
-is missing is the request-side definitions that turn them on — 15 tool types, each
-with its own configuration.
+**Hosted-tool definitions.** Their *events* and *call items* decode. Web search
+is declarable (`web_search::WebSearchTool`) and its calls replay as input items
+(`web_search::WebSearchCall`); the other 14 tool types, and replay of their
+calls, are not yet modeled.
 
 **Stateful continuation** — `previous_response_id` and `conversation` — is a
 mission-level exclusion rather than a gap. Both hand prefix control to the

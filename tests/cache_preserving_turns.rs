@@ -10,11 +10,11 @@ use openai::context::{BreakpointSlot, Context};
 use openai::model::{EffortNoneToMax, Model};
 use openai::prefix::PrefixSettings;
 use openai::request::{Request, UncacheableInstructions};
-use openai::tools::{AllowedToolsMode, FunctionTool, ToolChoice};
+use openai::tools::{AllowedToolsMode, FunctionTool, Tool, ToolChoice};
 use openai::values::{AssistantPhase, ReasoningContext, ReasoningMode};
 use serde_json::{Value, json};
 
-fn tools() -> Vec<FunctionTool> {
+fn tools() -> Vec<Tool> {
     vec![
         FunctionTool::new("read_file", json!({"type": "object", "properties": {"path": {"type": "string"}}}))
             .with_description("Read a file")
@@ -23,6 +23,9 @@ fn tools() -> Vec<FunctionTool> {
             .with_description("Write a file")
             .with_strict_arguments(),
     ]
+    .into_iter()
+    .map(Tool::from)
+    .collect()
 }
 
 /// A thread's first turn, in full. Every field OpenAI documents a default for is

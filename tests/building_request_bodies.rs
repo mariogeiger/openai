@@ -16,7 +16,7 @@ use openai::model::{
 };
 use openai::prefix::{PrefixSettings, TextFormat};
 use openai::request::{CacheWriteBudget, Request, RequestError, UncacheableInstructions};
-use openai::tools::{AllowedToolsMode, FunctionTool, ToolChoice};
+use openai::tools::{AllowedToolsMode, FunctionTool, Tool, ToolChoice};
 use openai::values::{
     CacheRetention, Include, Metadata, ReasoningContext, ReasoningMode, ReasoningSummary, ServiceTier, Truncation,
     Verbosity,
@@ -25,11 +25,14 @@ use serde_json::{Value, json};
 
 /// The two-tool array these tests share, so a body assertion is about the field
 /// under test rather than about the tools beside it.
-fn tools() -> Vec<FunctionTool> {
+fn tools() -> Vec<Tool> {
     vec![
         FunctionTool::new("read_file", json!({"type": "object"})),
         FunctionTool::new("write_file", json!({"type": "object"})),
     ]
+    .into_iter()
+    .map(Tool::from)
+    .collect()
 }
 
 /// The body a request serializes to, which is the only thing these tests read.
@@ -633,4 +636,29 @@ fn configuration_update_restrictions_are_checked_before_serialization() {
         Request::new(&adjacent, PrefixSettings::new(Model::gpt_6_astra())),
         Err(RequestError::AdjacentConfigurationUpdates)
     ));
+}
+
+/// Web search joins the one ordered `tools` array, and the call it left behind
+/// replays as an input item the next request carries.
+#[test]
+fn a_web_search_offers_and_replays_in_the_body() {
+    use openai::web_search::{WebSearchCall, WebSearchTool};
+    let mut context = Context::new(vec![
+        FunctionTool::new("read_file", json!({"type": "object"})).into(),
+        WebSearchTool::new().into(),
+    ]);
+    context.push_user_text("What happened today?");
+    let item = json!({"type": "web_search_call", "id": "ws_1", "status": "completed",
+                      "action": {"type": "search", "query": "news today", "sources": [{"type": "url", "url": "https://example.com"}]}});
+    context.push_web_search_call(WebSearchCall::from_item(&item).unwrap());
+    context.push_assistant_text(openai::values::AssistantPhase::FinalAnswer, "Here is the news.");
+
+    let v = body(&context, PrefixSettings::new(Model::gpt_5_6_sol()));
+    assert_eq!(v["tools"][0]["name"], "read_file");
+    assert_eq!(
+        v["tools"][1],
+        json!({"type": "web_search", "external_web_access": true, "search_context_size": "medium"})
+    );
+    assert_eq!(v["input"][1], item);
+    assert!(context.allow_tools(AllowedToolsMode::Auto, &["read_file"]).is_ok());
 }

@@ -66,8 +66,9 @@ fn message_block_types(body: &Value) -> Vec<(String, String)> {
 /// A thread holding every message shape the crate can build: both input roles,
 /// both assistant block kinds, an image, and a tool result.
 fn every_message_shape() -> Context {
-    let mut context =
-        Context::new(vec![FunctionTool::new("read_file", json!({"type": "object"})).with_description("Read a file")]);
+    let mut context = Context::new(vec![
+        FunctionTool::new("read_file", json!({"type": "object"})).with_description("Read a file").into(),
+    ]);
     context.push_anchored_developer_text(BreakpointSlot::S0, "Stable instructions.").unwrap();
     context.push_user(vec![
         InputBlock::text("Look at this and read a.rs"),
