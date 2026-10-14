@@ -201,7 +201,7 @@ URL.
 
 ## Modeled
 
-`gpt-6-astra`, `gpt-6-sol`, `gpt-5.6-sol`, `gpt-5.6-terra`, `gpt-5.6-luna`, `gpt-5.5`,
+`gpt-6-astra`, `gpt-6.1-sol`, `gpt-6-sol`, `gpt-5.6-sol`, `gpt-5.6-terra`, `gpt-5.6-luna`, `gpt-5.5`,
 `gpt-5.5-pro`, `gpt-5.4`. Each carries its maximum input and output sizes,
 context window, knowledge cutoff, minimum cacheable prefix, and exact base
 per-token pricing including cache reads and writes. `Pricing` documents the
@@ -209,7 +209,8 @@ long-context and service-tier adjustments its exact arithmetic excludes.
 
 GPT-6 Sol accepts `EffortNoneToMax` and documents `medium` as its default;
 `Model::gpt_6_sol()` leaves the effort unset until the caller chooses one.
-GPT-6 Astra has its own `EffortLowToMax`, so `none` does not compile. Function
+GPT-6 Astra and GPT-6.1 Sol share one type, `Gpt6LowToMax`, whose
+`EffortLowToMax` has no `none`, so `none` does not compile. Function
 tools can state `async: true` without losing that flag when the returned call is
 decoded and replayed. The crate currently models append-only
 `configuration_update` items for Astra only. Request validation rejects other

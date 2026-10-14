@@ -163,7 +163,7 @@ impl Serialize for Request<'_> {
         // from one match is what makes sending both impossible.
         let (prompt_cache_options, prompt_cache_retention) = match &prefix.model {
             Model::Gpt6Sol(m) => (Some(CacheOptionsWire { mode: m.caching.mode, ttl: m.caching.ttl }), None),
-            Model::Gpt6Astra(m) => (Some(CacheOptionsWire { mode: m.caching.mode, ttl: m.caching.ttl }), None),
+            Model::Gpt6LowToMax(m) => (Some(CacheOptionsWire { mode: m.caching.mode, ttl: m.caching.ttl }), None),
             Model::Gpt5_6(m) => (Some(CacheOptionsWire { mode: m.caching.mode, ttl: m.caching.ttl }), None),
             Model::Gpt5_5(m) => (None, Some(retention_of(m.retention))),
             Model::Gpt5_5Pro(m) => (None, Some(retention_of(m.retention))),
@@ -182,7 +182,7 @@ impl Serialize for Request<'_> {
         // `context` carries its documented default and is always sent there;
         // `mode` has no documented default and is sent only when chosen.
         let (mode, context) = match &prefix.model {
-            Model::Gpt6Astra(m) => (m.mode, Some(m.reasoning_context)),
+            Model::Gpt6LowToMax(m) => (m.mode, Some(m.reasoning_context)),
             Model::Gpt6Sol(m) => (m.mode, Some(m.reasoning_context)),
             Model::Gpt5_6(m) => (m.mode, Some(m.reasoning_context)),
             Model::Gpt5_5(_) | Model::Gpt5_5Pro(_) | Model::Gpt5_4(_) => (None, None),

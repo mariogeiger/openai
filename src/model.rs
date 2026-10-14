@@ -2,8 +2,8 @@
 //!
 //! Models differ in three ways that a single shared struct would blur:
 //!
-//! * **Which reasoning efforts they accept.** GPT-6 Astra adds `max` but
-//!   refuses `none`; GPT-5.5 Pro refuses everything below `medium`.
+//! * **Which reasoning efforts they accept.** GPT-6 Astra and GPT-6.1 Sol
+//!   take `max` but refuse `none`; GPT-5.5 Pro refuses everything below `medium`.
 //! * **Which field controls cache lifetime.** GPT-5.6 and later, including Astra, use
 //!   `prompt_cache_options.ttl`; earlier models use `prompt_cache_retention`.
 //!   These are different fields with different value sets, and sending the
@@ -11,11 +11,12 @@
 //! * **Whether explicit cache breakpoints exist at all.** Only GPT-5.6 and
 //!   later, including Astra, honor them.
 //!
-//! So the type boundary follows the parameter set, not the model name: the
-//! Astra and Sol have distinct effort types, while the three GPT-5.6 tiers accept exactly the
-//! same parameters and share one type
-//! that carries a [`Gpt5_6Tier`], while GPT-5.5, GPT-5.5 Pro, and GPT-5.4 each
-//! get their own type because each accepts something the others do not.
+//! So the type boundary follows the parameter set, not the model name. GPT-6
+//! Astra and GPT-6.1 Sol accept exactly the same parameters and share one type
+//! that carries a [`Gpt6LowToMaxTier`]; GPT-6 Sol accepts `none` as well and has
+//! its own. The three GPT-5.6 tiers share one type that carries a
+//! [`Gpt5_6Tier`], while GPT-5.5, GPT-5.5 Pro, and GPT-5.4 each get their own
+//! type because each accepts something the others do not.
 
 #![allow(non_camel_case_types)]
 
@@ -43,15 +44,15 @@ api_enum! {
 }
 
 api_enum! {
-    /// The reasoning efforts GPT-6 Astra accepts. `none` is absent because
-    /// Astra refuses it rather than treating it as a weaker level.
+    /// The reasoning efforts GPT-6 Astra and GPT-6.1 Sol accept. `none` is
+    /// absent because both refuse it rather than treating it as a weaker level.
     ///
     /// ```compile_fail
     /// use openai::model::EffortLowToMax;
     /// let _ = EffortLowToMax::None;
     /// ```
     EffortLowToMax {
-        /// The least reasoning Astra offers.
+        /// The least reasoning these models offer.
         Low => "low",
         /// Balanced reasoning.
         Medium => "medium",
@@ -179,18 +180,32 @@ impl Default for Gpt5_6Caching {
     }
 }
 
-/// The cache controls GPT-6 Astra shares with GPT-5.6.
+/// Which GPT-6 model that refuses `none` to route to. Astra and GPT-6.1 Sol
+/// accept identical parameters and differ in price and capability, so which one
+/// is a value on one model type rather than two types that would be textually
+/// identical.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum Gpt6LowToMaxTier {
+    /// GPT-6 Astra, the most capable.
+    Astra,
+    /// GPT-6.1 Sol, near Astra at a lower cost.
+    Sol6_1,
+}
+
+/// The cache controls GPT-6 Astra and GPT-6.1 Sol share with GPT-5.6.
 ///
 /// The alias names the model-facing contract while keeping one representation
 /// for the identical `prompt_cache_options` object.
-pub type Gpt6AstraCaching = Gpt5_6Caching;
+pub type Gpt6LowToMaxCaching = Gpt5_6Caching;
 
-/// GPT-6 Astra's accepted parameter set.
+/// The accepted parameter set of GPT-6 Astra and GPT-6.1 Sol.
 ///
-/// Its effort type starts at `low`, so `none` cannot reach the wire. Astra uses
+/// Its effort type starts at `low`, so `none` cannot reach the wire. Both use
 /// the same explicit breakpoint and cache-TTL controls as GPT-5.6.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct Gpt6Astra {
+pub struct Gpt6LowToMax {
+    /// Which of the two models to route to.
+    pub tier: Gpt6LowToMaxTier,
     /// How much the model reasons before answering, when the caller says.
     pub effort: Option<EffortLowToMax>,
     /// Standard or Pro execution, independent of effort.
@@ -198,29 +213,23 @@ pub struct Gpt6Astra {
     /// Which earlier reasoning is rendered into this turn.
     pub reasoning_context: ReasoningContext,
     /// Breakpoint mode and minimum cache lifetime.
-    pub caching: Gpt6AstraCaching,
+    pub caching: Gpt6LowToMaxCaching,
 }
 
-impl Default for Gpt6Astra {
-    /// Documented defaults are emitted; fields with no documented default stay
-    /// absent so the crate does not decide how Astra thinks.
-    fn default() -> Self {
+impl Gpt6LowToMax {
+    /// `tier` with documented defaults emitted; fields with no documented
+    /// default stay absent so the crate does not decide how the model thinks.
+    pub fn new(tier: Gpt6LowToMaxTier) -> Self {
         Self {
+            tier,
             effort: None,
             mode: None,
             reasoning_context: ReasoningContext::Auto,
-            caching: Gpt6AstraCaching::default(),
+            caching: Gpt6LowToMaxCaching::default(),
         }
     }
-}
 
-impl Gpt6Astra {
-    /// Astra with documented defaults and no invented reasoning choice.
-    pub fn new() -> Self {
-        Self::default()
-    }
-
-    /// Set a reasoning level Astra accepts.
+    /// Set a reasoning level the model accepts.
     pub fn with_effort(mut self, effort: EffortLowToMax) -> Self {
         self.effort = Some(effort);
         self
@@ -252,7 +261,7 @@ impl Gpt6Astra {
     }
 
     /// Choose the breakpoint mode and minimum cache lifetime outright.
-    pub fn with_caching(mut self, caching: Gpt6AstraCaching) -> Self {
+    pub fn with_caching(mut self, caching: Gpt6LowToMaxCaching) -> Self {
         self.caching = caching;
         self
     }
@@ -491,6 +500,8 @@ impl Gpt5_4 {
 pub enum ModelId {
     /// `gpt-6-astra`.
     Gpt6Astra,
+    /// `gpt-6.1-sol`.
+    Gpt6_1Sol,
     /// `gpt-6-sol`.
     Gpt6Sol,
     /// `gpt-5.6-sol`.
@@ -550,6 +561,7 @@ impl ModelId {
     pub fn api_id(self) -> &'static str {
         match self {
             ModelId::Gpt6Astra => "gpt-6-astra",
+            ModelId::Gpt6_1Sol => "gpt-6.1-sol",
             ModelId::Gpt6Sol => "gpt-6-sol",
             ModelId::Gpt5_6Sol => "gpt-5.6-sol",
             ModelId::Gpt5_6Terra => "gpt-5.6-terra",
@@ -569,7 +581,12 @@ impl ModelId {
     pub fn supports_explicit_cache_breakpoints(self) -> bool {
         matches!(
             self,
-            ModelId::Gpt6Astra | ModelId::Gpt6Sol | ModelId::Gpt5_6Sol | ModelId::Gpt5_6Terra | ModelId::Gpt5_6Luna
+            ModelId::Gpt6Astra
+                | ModelId::Gpt6_1Sol
+                | ModelId::Gpt6Sol
+                | ModelId::Gpt5_6Sol
+                | ModelId::Gpt5_6Terra
+                | ModelId::Gpt5_6Luna
         )
     }
 
@@ -603,7 +620,7 @@ impl ModelId {
     /// The month through which the model's knowledge is reliable.
     pub fn knowledge_cutoff(self) -> YearMonth {
         let (year, month) = match self {
-            ModelId::Gpt6Astra | ModelId::Gpt6Sol => (2026, 4),
+            ModelId::Gpt6Astra | ModelId::Gpt6_1Sol | ModelId::Gpt6Sol => (2026, 4),
             ModelId::Gpt5_6Sol | ModelId::Gpt5_6Terra | ModelId::Gpt5_6Luna => (2026, 2),
             ModelId::Gpt5_5 | ModelId::Gpt5_5Pro => (2025, 12),
             ModelId::Gpt5_4 => (2025, 8),
@@ -624,9 +641,12 @@ impl ModelId {
     pub fn default_effort(self) -> Option<ReasoningEffort> {
         match self {
             ModelId::Gpt6Astra => None,
-            ModelId::Gpt6Sol | ModelId::Gpt5_6Sol | ModelId::Gpt5_6Terra | ModelId::Gpt5_6Luna | ModelId::Gpt5_5 => {
-                Some(ReasoningEffort::Medium)
-            }
+            ModelId::Gpt6_1Sol
+            | ModelId::Gpt6Sol
+            | ModelId::Gpt5_6Sol
+            | ModelId::Gpt5_6Terra
+            | ModelId::Gpt5_6Luna
+            | ModelId::Gpt5_5 => Some(ReasoningEffort::Medium),
             ModelId::Gpt5_5Pro => Some(ReasoningEffort::High),
             ModelId::Gpt5_4 => Some(ReasoningEffort::None),
         }
@@ -638,6 +658,8 @@ impl ModelId {
             // Astra and GPT-5.6: cached reads at 0.1x, cache writes at 1.25x.
             ModelId::Gpt6Astra => (10_000, 1_000, 12_500, 50_000),
             ModelId::Gpt6Sol => (2_000, 200, 2_500, 10_000),
+            // GPT-6.1 Sol: cached reads at 0.05x, cache writes at 1.25x.
+            ModelId::Gpt6_1Sol => (2_000, 100, 2_500, 10_000),
             // GPT-5.6: cached reads at 0.1x, cache writes at 1.25x.
             ModelId::Gpt5_6Sol => (4_000, 400, 5_000, 20_000),
             ModelId::Gpt5_6Terra => (2_000, 200, 2_500, 12_000),
@@ -664,8 +686,8 @@ impl ModelId {
 /// is not merely rejected at runtime — it does not exist on that variant.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Model {
-    /// GPT-6 Astra.
-    Gpt6Astra(Gpt6Astra),
+    /// GPT-6 Astra or GPT-6.1 Sol.
+    Gpt6LowToMax(Gpt6LowToMax),
     /// GPT-6 Sol.
     Gpt6Sol(Gpt6Sol),
     /// A GPT-5.6 tier.
@@ -682,7 +704,10 @@ impl Model {
     /// Identity without per-call parameters.
     pub fn id(&self) -> ModelId {
         match self {
-            Model::Gpt6Astra(_) => ModelId::Gpt6Astra,
+            Model::Gpt6LowToMax(m) => match m.tier {
+                Gpt6LowToMaxTier::Astra => ModelId::Gpt6Astra,
+                Gpt6LowToMaxTier::Sol6_1 => ModelId::Gpt6_1Sol,
+            },
             Model::Gpt6Sol(_) => ModelId::Gpt6Sol,
             Model::Gpt5_6(m) => match m.tier {
                 Gpt5_6Tier::Sol => ModelId::Gpt5_6Sol,
@@ -701,8 +726,13 @@ impl Model {
     }
 
     /// GPT-6 Astra with documented defaults.
-    pub fn gpt_6_astra() -> Gpt6Astra {
-        Gpt6Astra::default()
+    pub fn gpt_6_astra() -> Gpt6LowToMax {
+        Gpt6LowToMax::new(Gpt6LowToMaxTier::Astra)
+    }
+
+    /// GPT-6.1 Sol with documented defaults.
+    pub fn gpt_6_1_sol() -> Gpt6LowToMax {
+        Gpt6LowToMax::new(Gpt6LowToMaxTier::Sol6_1)
     }
 
     /// GPT-6 Sol without imposing a reasoning choice.
@@ -741,9 +771,9 @@ impl Model {
     }
 }
 
-impl From<Gpt6Astra> for Model {
-    fn from(m: Gpt6Astra) -> Self {
-        Model::Gpt6Astra(m)
+impl From<Gpt6LowToMax> for Model {
+    fn from(m: Gpt6LowToMax) -> Self {
+        Model::Gpt6LowToMax(m)
     }
 }
 

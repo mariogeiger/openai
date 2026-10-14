@@ -243,7 +243,7 @@ impl PrefixSettings {
     pub fn effort(&self) -> Option<ReasoningEffort> {
         use crate::model::{EffortMediumToXhigh as Pro, EffortNoneToMax as Six};
         match &self.model {
-            Model::Gpt6Astra(m) => m.effort.map(|e| match e {
+            Model::Gpt6LowToMax(m) => m.effort.map(|e| match e {
                 crate::model::EffortLowToMax::Low => ReasoningEffort::Low,
                 crate::model::EffortLowToMax::Medium => ReasoningEffort::Medium,
                 crate::model::EffortLowToMax::High => ReasoningEffort::High,

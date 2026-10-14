@@ -66,7 +66,7 @@ impl CacheWriteBudget {
                 CacheMode::Implicit => Self { explicit_slots: CACHE_WRITE_SLOTS - 1, implicit_breakpoint: true },
                 CacheMode::Explicit => Self { explicit_slots: CACHE_WRITE_SLOTS, implicit_breakpoint: false },
             },
-            Model::Gpt6Astra(m) => match m.caching.mode {
+            Model::Gpt6LowToMax(m) => match m.caching.mode {
                 CacheMode::Implicit => Self { explicit_slots: CACHE_WRITE_SLOTS - 1, implicit_breakpoint: true },
                 CacheMode::Explicit => Self { explicit_slots: CACHE_WRITE_SLOTS, implicit_breakpoint: false },
             },
@@ -303,7 +303,10 @@ fn validate_configuration_updates(
     if context.configuration_update_count() == 0 {
         return Ok(());
     }
-    let crate::model::Model::Gpt6Astra(astra) = &prefix.model else {
+    let crate::model::Model::Gpt6LowToMax(
+        astra @ crate::model::Gpt6LowToMax { tier: crate::model::Gpt6LowToMaxTier::Astra, .. },
+    ) = &prefix.model
+    else {
         return Err(RequestError::ConfigurationUpdateRequiresAstra { model: prefix.model.api_id() });
     };
     if astra.mode == Some(crate::values::ReasoningMode::Pro) {

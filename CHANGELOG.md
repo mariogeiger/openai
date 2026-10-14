@@ -10,6 +10,25 @@ and the working instructions. 0.5.0 split it into `SOUL.md` and `AGENTS.md`; the
 older references are left as they were written, because a changelog records what
 was true at the time.
 
+## [0.12.0] - 2026-10-14
+
+### Added
+
+- GPT-6.1 Sol: `Model::gpt_6_1_sol()`, `ModelId::Gpt6_1Sol` (`gpt-6.1-sol`),
+  with its documented limits, April 2026 knowledge cutoff, `medium` default
+  effort, and pricing — cached reads at 5% of input, cache writes at 1.25x.
+
+### Changed
+
+- **Breaking.** GPT-6 Astra and GPT-6.1 Sol accept exactly the same parameters,
+  so they share one type: `Gpt6Astra` becomes `Gpt6LowToMax`, carrying a
+  `Gpt6LowToMaxTier` (`Astra` or `Sol6_1`); `Model::Gpt6Astra` becomes
+  `Model::Gpt6LowToMax`, and `Gpt6AstraCaching` becomes `Gpt6LowToMaxCaching`.
+  `Model::gpt_6_astra()` is unchanged in use. Migrate by renaming; code that
+  matched `Model::Gpt6Astra(m)` matches `Model::Gpt6LowToMax(m)` and reads
+  `m.tier` where it cared which model it was.
+- `configuration_update` stays validated for Astra alone.
+
 ## [0.11.0] - 2026-09-28
 
 ### Added
