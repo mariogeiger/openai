@@ -162,9 +162,8 @@ impl Serialize for Request<'_> {
         // on GPT-5.6 and later, `prompt_cache_retention` before. Building both
         // from one match is what makes sending both impossible.
         let (prompt_cache_options, prompt_cache_retention) = match &prefix.model {
-            Model::Gpt6Sol(m) => (Some(CacheOptionsWire { mode: m.caching.mode, ttl: m.caching.ttl }), None),
             Model::Gpt6LowToMax(m) => (Some(CacheOptionsWire { mode: m.caching.mode, ttl: m.caching.ttl }), None),
-            Model::Gpt5_6(m) => (Some(CacheOptionsWire { mode: m.caching.mode, ttl: m.caching.ttl }), None),
+            Model::GptNoneToMax(m) => (Some(CacheOptionsWire { mode: m.caching.mode, ttl: m.caching.ttl }), None),
             Model::Gpt5_5(m) => (None, Some(retention_of(m.retention))),
             Model::Gpt5_5Pro(m) => (None, Some(retention_of(m.retention))),
             // The one model that accepts both values, and the one whose default
@@ -178,13 +177,14 @@ impl Serialize for Request<'_> {
             }
         }
 
-        // `mode` and `context` exist only on GPT-5.6; earlier models 400 on them.
-        // `context` carries its documented default and is always sent there;
-        // `mode` has no documented default and is sent only when chosen.
+        // `mode` exists only on GPT-5.6 and later; GPT-5.5 and GPT-5.4 answer it
+        // with a 400 (measured 2026-11-18). `context` is accepted by them too, but
+        // is not modeled there: sending it would change their hashed prefix.
+        // Where it is modeled it carries its documented default and is always
+        // sent; `mode` has no documented default and is sent only when chosen.
         let (mode, context) = match &prefix.model {
             Model::Gpt6LowToMax(m) => (m.mode, Some(m.reasoning_context)),
-            Model::Gpt6Sol(m) => (m.mode, Some(m.reasoning_context)),
-            Model::Gpt5_6(m) => (m.mode, Some(m.reasoning_context)),
+            Model::GptNoneToMax(m) => (m.mode, Some(m.reasoning_context)),
             Model::Gpt5_5(_) | Model::Gpt5_5Pro(_) | Model::Gpt5_4(_) => (None, None),
         };
 

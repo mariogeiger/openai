@@ -5,25 +5,30 @@
 //! * **Which reasoning efforts they accept.** GPT-6 Astra and GPT-6.1 Sol
 //!   take `max` but refuse `none`; GPT-5.5 Pro refuses everything below `medium`.
 //! * **Which field controls cache lifetime.** GPT-5.6 and later, including Astra, use
-//!   `prompt_cache_options.ttl`; earlier models use `prompt_cache_retention`.
-//!   These are different fields with different value sets, and sending the
-//!   wrong one is a 400.
+//!   `prompt_cache_options.ttl`; earlier models use `prompt_cache_retention`
+//!   and refuse `prompt_cache_options` (measured 2026-11-18: GPT-5.5 and GPT-5.4
+//!   answer *"prompt_cache_options is not supported on this model"*). The
+//!   reference now deprecates `prompt_cache_retention` in favour of `ttl`, and
+//!   the newer models still accept it, but this crate sends exactly one of the
+//!   two per model.
 //! * **Whether explicit cache breakpoints exist at all.** Only GPT-5.6 and
 //!   later, including Astra, honor them.
 //!
-//! So the type boundary follows the parameter set, not the model name. GPT-6
-//! Astra and GPT-6.1 Sol accept exactly the same parameters and share one type
-//! that carries a [`Gpt6LowToMaxTier`]; GPT-6 Sol accepts `none` as well and has
-//! its own. The three GPT-5.6 tiers share one type that carries a
-//! [`Gpt5_6Tier`], while GPT-5.5, GPT-5.5 Pro, and GPT-5.4 each get their own
-//! type because each accepts something the others do not.
+//! So the type boundary follows the parameter set, not the model name. The
+//! models from GPT-5.6 on accept the same parameters up to the range of
+//! efforts, and share the generic [`ReasoningModel`]: [`GptNoneToMax`] for the
+//! ones that take `none` and [`Gpt6LowToMax`] for Astra and GPT-6.1 Sol, each
+//! carrying the tier that names the model. GPT-5.5, GPT-5.5 Pro, and GPT-5.4
+//! each get their own type because each accepts something the others do not.
 
 #![allow(non_camel_case_types)]
 
-mod gpt6_sol;
-pub use gpt6_sol::{Gpt6Sol, Gpt6SolCaching};
+mod reasoning_model;
+pub use reasoning_model::{
+    CacheOptions, Gpt6LowToMax, Gpt6LowToMaxTier, GptNoneToMax, GptNoneToMaxTier, ModelTier, ReasoningModel,
+};
 
-use crate::values::{CacheMode, CacheRetention, CacheTtl, ReasoningContext, ReasoningEffort, ReasoningMode, api_enum};
+use crate::values::{CacheRetention, ReasoningEffort, api_enum};
 
 api_enum! {
     /// The reasoning efforts GPT-5.6 and GPT-6 Sol accept, including `none`.
@@ -131,228 +136,6 @@ api_enum! {
     ExtendedRetentionOnly {
         /// Up to 24 hours.
         TwentyFourHours => "24h",
-    }
-}
-
-/// Which GPT-5.6 tier to route to. The tiers accept identical parameters and
-/// differ only in price, so tier is a value on one model type rather than three
-/// types that would be textually identical.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub enum Gpt5_6Tier {
-    /// Flagship: the `gpt-5.6` alias points here.
-    Sol,
-    /// Balanced intelligence and cost.
-    Terra,
-    /// Cost-sensitive, high-volume workloads.
-    Luna,
-}
-
-/// `prompt_cache_options` — the GPT-5.6 caching control.
-///
-/// Only GPT-5.6 and later carry this. Reaching for it on an earlier model does
-/// not compile, because [`Gpt5_5`] has no such field — it has
-/// `prompt_cache_retention` instead, and the two can never be sent together:
-///
-/// ```compile_fail
-/// use openai::model::Model;
-/// let _ = Model::gpt_5_5().caching;
-/// ```
-///
-/// [`mode`](Self::mode) is not cosmetic: `Implicit` spends one of the four
-/// per-request cache-write slots on a breakpoint OpenAI places for you, leaving
-/// three for your own. [`crate::request::Request::new`] enforces that budget.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct Gpt5_6Caching {
-    /// Whether OpenAI adds its own breakpoint at the end of the latest
-    /// eligible message.
-    pub mode: CacheMode,
-    /// Minimum lifetime of every breakpoint this request writes.
-    pub ttl: CacheTtl,
-}
-
-impl Default for Gpt5_6Caching {
-    /// The API's own documented defaults: `mode` "Defaults to `implicit`", and
-    /// `ttl` "Defaults to `30m`". Both are plain fields carrying the documented
-    /// value, so the request states what the model sees rather than inheriting
-    /// a server-side default that could shift.
-    fn default() -> Self {
-        Self { mode: CacheMode::Implicit, ttl: CacheTtl::ThirtyMinutes }
-    }
-}
-
-/// Which GPT-6 model that refuses `none` to route to. Astra and GPT-6.1 Sol
-/// accept identical parameters and differ in price and capability, so which one
-/// is a value on one model type rather than two types that would be textually
-/// identical.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub enum Gpt6LowToMaxTier {
-    /// GPT-6 Astra, the most capable.
-    Astra,
-    /// GPT-6.1 Sol, near Astra at a lower cost.
-    Sol6_1,
-}
-
-/// The cache controls GPT-6 Astra and GPT-6.1 Sol share with GPT-5.6.
-///
-/// The alias names the model-facing contract while keeping one representation
-/// for the identical `prompt_cache_options` object.
-pub type Gpt6LowToMaxCaching = Gpt5_6Caching;
-
-/// The accepted parameter set of GPT-6 Astra and GPT-6.1 Sol.
-///
-/// Its effort type starts at `low`, so `none` cannot reach the wire. Both use
-/// the same explicit breakpoint and cache-TTL controls as GPT-5.6.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct Gpt6LowToMax {
-    /// Which of the two models to route to.
-    pub tier: Gpt6LowToMaxTier,
-    /// How much the model reasons before answering, when the caller says.
-    pub effort: Option<EffortLowToMax>,
-    /// Standard or Pro execution, independent of effort.
-    pub mode: Option<ReasoningMode>,
-    /// Which earlier reasoning is rendered into this turn.
-    pub reasoning_context: ReasoningContext,
-    /// Breakpoint mode and minimum cache lifetime.
-    pub caching: Gpt6LowToMaxCaching,
-}
-
-impl Gpt6LowToMax {
-    /// `tier` with documented defaults emitted; fields with no documented
-    /// default stay absent so the crate does not decide how the model thinks.
-    pub fn new(tier: Gpt6LowToMaxTier) -> Self {
-        Self {
-            tier,
-            effort: None,
-            mode: None,
-            reasoning_context: ReasoningContext::Auto,
-            caching: Gpt6LowToMaxCaching::default(),
-        }
-    }
-
-    /// Set a reasoning level the model accepts.
-    pub fn with_effort(mut self, effort: EffortLowToMax) -> Self {
-        self.effort = Some(effort);
-        self
-    }
-
-    /// Leave `reasoning.effort` unsent.
-    pub fn without_effort(mut self) -> Self {
-        self.effort = None;
-        self
-    }
-
-    /// Select standard or Pro execution.
-    pub fn with_mode(mut self, mode: ReasoningMode) -> Self {
-        self.mode = Some(mode);
-        self
-    }
-
-    /// Choose which earlier reasoning the model may render.
-    pub fn with_reasoning_context(mut self, context: ReasoningContext) -> Self {
-        self.reasoning_context = context;
-        self
-    }
-
-    /// Turn off OpenAI's implicit breakpoint, leaving all four slots available
-    /// for explicit breakpoints.
-    pub fn with_explicit_cache_only(mut self) -> Self {
-        self.caching.mode = CacheMode::Explicit;
-        self
-    }
-
-    /// Choose the breakpoint mode and minimum cache lifetime outright.
-    pub fn with_caching(mut self, caching: Gpt6LowToMaxCaching) -> Self {
-        self.caching = caching;
-        self
-    }
-}
-
-/// GPT-5.6 Sol, Terra, or Luna.
-///
-/// Carries `reasoning.mode` and `reasoning.context`, which earlier models do
-/// not accept, and [`Gpt5_6Caching`] rather than a retention policy.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct Gpt5_6 {
-    /// Which tier to route to.
-    pub tier: Gpt5_6Tier,
-    /// How much the model reasons before answering, when the caller says.
-    ///
-    /// `None` means the field is not sent, and the model reasons at whatever
-    /// level it documents for itself — [`ModelId::default_effort`] states that
-    /// level without imposing it. The API documents no default for
-    /// `reasoning.effort` and reports `"effort": null` on a response that never
-    /// carried one, so "told a level" and "not told" are two runtime states,
-    /// not one value and its default.
-    pub effort: Option<EffortNoneToMax>,
-    /// Standard or Pro execution, independent of effort. `None` is not sent:
-    /// the API documents no default for `reasoning.mode`.
-    pub mode: Option<ReasoningMode>,
-    /// Which earlier reasoning is rendered into this turn. Always sent, because
-    /// the API documents a default — `auto`, which the model then resolves.
-    pub reasoning_context: ReasoningContext,
-    /// Breakpoint mode and minimum cache lifetime.
-    pub caching: Gpt5_6Caching,
-}
-
-impl Gpt5_6 {
-    /// Every documented default stated explicitly, and nothing else chosen.
-    ///
-    /// `reasoning.context` is `auto` and the caching fields are `implicit` /
-    /// `30m`, because the API documents those defaults and emitting them keeps
-    /// the request a complete record of the prefix the model will see — stable
-    /// even if OpenAI's defaults shift. `reasoning.effort` and `reasoning.mode`
-    /// have no documented default, so they start absent: the crate does not
-    /// decide how hard this model thinks.
-    pub fn new(tier: Gpt5_6Tier) -> Self {
-        Self {
-            tier,
-            effort: None,
-            mode: None,
-            reasoning_context: ReasoningContext::Auto,
-            caching: Gpt5_6Caching::default(),
-        }
-    }
-
-    /// Set the reasoning effort.
-    pub fn with_effort(mut self, effort: EffortNoneToMax) -> Self {
-        self.effort = Some(effort);
-        self
-    }
-
-    /// Leave `reasoning.effort` unsent, so the model reasons at its own
-    /// documented level. See [`ModelId::default_effort`] for what that is.
-    pub fn without_effort(mut self) -> Self {
-        self.effort = None;
-        self
-    }
-
-    /// Select standard or Pro execution.
-    pub fn with_mode(mut self, mode: ReasoningMode) -> Self {
-        self.mode = Some(mode);
-        self
-    }
-
-    /// Choose which earlier reasoning the model may render.
-    pub fn with_reasoning_context(mut self, context: ReasoningContext) -> Self {
-        self.reasoning_context = context;
-        self
-    }
-
-    /// Turn off OpenAI's implicit breakpoint, freeing all four write slots for
-    /// breakpoints you place yourself. With no explicit breakpoint placed, a
-    /// request in this mode uses no caching at all.
-    pub fn with_explicit_cache_only(mut self) -> Self {
-        self.caching.mode = CacheMode::Explicit;
-        self
-    }
-
-    /// Choose the breakpoint mode and minimum cache lifetime outright.
-    ///
-    /// Caching is the caller's decision, so the whole object is settable and
-    /// not only the one corner [`Self::with_explicit_cache_only`] reaches.
-    pub fn with_caching(mut self, caching: Gpt5_6Caching) -> Self {
-        self.caching = caching;
-        self
     }
 }
 
@@ -502,8 +285,12 @@ pub enum ModelId {
     Gpt6Astra,
     /// `gpt-6.1-sol`.
     Gpt6_1Sol,
+    /// `gpt-6.1-terra`.
+    Gpt6_1Terra,
     /// `gpt-6-sol`.
     Gpt6Sol,
+    /// `gpt-6-luna`.
+    Gpt6Luna,
     /// `gpt-5.6-sol`.
     Gpt5_6Sol,
     /// `gpt-5.6-terra`.
@@ -531,8 +318,9 @@ pub enum ModelId {
 /// keeps the cost formula uniform instead of branching per model.
 ///
 /// Not represented: the 2× input / 1.5× output surcharge above 272K input
-/// tokens, batch and flex discounts, regional-processing uplift, and the fact
-/// that promotional prices expire. Verify against the pricing page before
+/// tokens, the higher price of a 12-hour cache write ([`CacheTtl::TwelveHours`](crate::values::CacheTtl::TwelveHours)),
+/// batch and flex discounts, regional-processing uplift, and the fact that
+/// promotional prices expire. Verify against the pricing page before
 /// billing anyone.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Pricing {
@@ -562,7 +350,9 @@ impl ModelId {
         match self {
             ModelId::Gpt6Astra => "gpt-6-astra",
             ModelId::Gpt6_1Sol => "gpt-6.1-sol",
+            ModelId::Gpt6_1Terra => "gpt-6.1-terra",
             ModelId::Gpt6Sol => "gpt-6-sol",
+            ModelId::Gpt6Luna => "gpt-6-luna",
             ModelId::Gpt5_6Sol => "gpt-5.6-sol",
             ModelId::Gpt5_6Terra => "gpt-5.6-terra",
             ModelId::Gpt5_6Luna => "gpt-5.6-luna",
@@ -583,7 +373,9 @@ impl ModelId {
             self,
             ModelId::Gpt6Astra
                 | ModelId::Gpt6_1Sol
+                | ModelId::Gpt6_1Terra
                 | ModelId::Gpt6Sol
+                | ModelId::Gpt6Luna
                 | ModelId::Gpt5_6Sol
                 | ModelId::Gpt5_6Terra
                 | ModelId::Gpt5_6Luna
@@ -621,6 +413,8 @@ impl ModelId {
     pub fn knowledge_cutoff(self) -> YearMonth {
         let (year, month) = match self {
             ModelId::Gpt6Astra | ModelId::Gpt6_1Sol | ModelId::Gpt6Sol => (2026, 4),
+            ModelId::Gpt6Luna => (2026, 5),
+            ModelId::Gpt6_1Terra => (2026, 6),
             ModelId::Gpt5_6Sol | ModelId::Gpt5_6Terra | ModelId::Gpt5_6Luna => (2026, 2),
             ModelId::Gpt5_5 | ModelId::Gpt5_5Pro => (2025, 12),
             ModelId::Gpt5_4 => (2025, 8),
@@ -642,7 +436,9 @@ impl ModelId {
         match self {
             ModelId::Gpt6Astra => None,
             ModelId::Gpt6_1Sol
+            | ModelId::Gpt6_1Terra
             | ModelId::Gpt6Sol
+            | ModelId::Gpt6Luna
             | ModelId::Gpt5_6Sol
             | ModelId::Gpt5_6Terra
             | ModelId::Gpt5_6Luna
@@ -658,8 +454,11 @@ impl ModelId {
             // Astra and GPT-5.6: cached reads at 0.1x, cache writes at 1.25x.
             ModelId::Gpt6Astra => (10_000, 1_000, 12_500, 50_000),
             ModelId::Gpt6Sol => (2_000, 200, 2_500, 10_000),
-            // GPT-6.1 Sol: cached reads at 0.05x, cache writes at 1.25x.
+            // GPT-6.1 Sol and Terra: cached reads at 0.05x, cache writes at 1.25x.
             ModelId::Gpt6_1Sol => (2_000, 100, 2_500, 10_000),
+            ModelId::Gpt6_1Terra => (1_000, 50, 1_250, 5_000),
+            // GPT-6 Luna: cached reads at 0.1x, cache writes at 1.25x.
+            ModelId::Gpt6Luna => (100, 10, 125, 500),
             // GPT-5.6: cached reads at 0.1x, cache writes at 1.25x.
             ModelId::Gpt5_6Sol => (4_000, 400, 5_000, 20_000),
             ModelId::Gpt5_6Terra => (2_000, 200, 2_500, 12_000),
@@ -688,10 +487,8 @@ impl ModelId {
 pub enum Model {
     /// GPT-6 Astra or GPT-6.1 Sol.
     Gpt6LowToMax(Gpt6LowToMax),
-    /// GPT-6 Sol.
-    Gpt6Sol(Gpt6Sol),
-    /// A GPT-5.6 tier.
-    Gpt5_6(Gpt5_6),
+    /// A GPT-5.6 tier, GPT-6 Sol, GPT-6.1 Terra or GPT-6 Luna.
+    GptNoneToMax(GptNoneToMax),
     /// GPT-5.5.
     Gpt5_5(Gpt5_5),
     /// GPT-5.5 Pro.
@@ -704,16 +501,8 @@ impl Model {
     /// Identity without per-call parameters.
     pub fn id(&self) -> ModelId {
         match self {
-            Model::Gpt6LowToMax(m) => match m.tier {
-                Gpt6LowToMaxTier::Astra => ModelId::Gpt6Astra,
-                Gpt6LowToMaxTier::Sol6_1 => ModelId::Gpt6_1Sol,
-            },
-            Model::Gpt6Sol(_) => ModelId::Gpt6Sol,
-            Model::Gpt5_6(m) => match m.tier {
-                Gpt5_6Tier::Sol => ModelId::Gpt5_6Sol,
-                Gpt5_6Tier::Terra => ModelId::Gpt5_6Terra,
-                Gpt5_6Tier::Luna => ModelId::Gpt5_6Luna,
-            },
+            Model::Gpt6LowToMax(m) => m.model_id(),
+            Model::GptNoneToMax(m) => m.model_id(),
             Model::Gpt5_5(_) => ModelId::Gpt5_5,
             Model::Gpt5_5Pro(_) => ModelId::Gpt5_5Pro,
             Model::Gpt5_4(_) => ModelId::Gpt5_4,
@@ -723,6 +512,17 @@ impl Model {
     /// The string sent in the `model` field.
     pub fn api_id(&self) -> &'static str {
         self.id().api_id()
+    }
+
+    /// The `prompt_cache_options` this model carries, on the models from
+    /// GPT-5.6 on; `None` on the earlier ones, which take a retention policy
+    /// instead.
+    pub fn cache_options(&self) -> Option<CacheOptions> {
+        match self {
+            Model::Gpt6LowToMax(m) => Some(m.caching),
+            Model::GptNoneToMax(m) => Some(m.caching),
+            Model::Gpt5_5(_) | Model::Gpt5_5Pro(_) | Model::Gpt5_4(_) => None,
+        }
     }
 
     /// GPT-6 Astra with documented defaults.
@@ -736,23 +536,33 @@ impl Model {
     }
 
     /// GPT-6 Sol without imposing a reasoning choice.
-    pub fn gpt_6_sol() -> Gpt6Sol {
-        Gpt6Sol::default()
+    pub fn gpt_6_sol() -> GptNoneToMax {
+        GptNoneToMax::new(GptNoneToMaxTier::Sol6)
+    }
+
+    /// GPT-6.1 Terra with documented defaults.
+    pub fn gpt_6_1_terra() -> GptNoneToMax {
+        GptNoneToMax::new(GptNoneToMaxTier::Terra6_1)
+    }
+
+    /// GPT-6 Luna with documented defaults.
+    pub fn gpt_6_luna() -> GptNoneToMax {
+        GptNoneToMax::new(GptNoneToMaxTier::Luna6)
     }
 
     /// GPT-5.6 Sol with documented defaults.
-    pub fn gpt_5_6_sol() -> Gpt5_6 {
-        Gpt5_6::new(Gpt5_6Tier::Sol)
+    pub fn gpt_5_6_sol() -> GptNoneToMax {
+        GptNoneToMax::new(GptNoneToMaxTier::Sol5_6)
     }
 
     /// GPT-5.6 Terra with documented defaults.
-    pub fn gpt_5_6_terra() -> Gpt5_6 {
-        Gpt5_6::new(Gpt5_6Tier::Terra)
+    pub fn gpt_5_6_terra() -> GptNoneToMax {
+        GptNoneToMax::new(GptNoneToMaxTier::Terra5_6)
     }
 
     /// GPT-5.6 Luna with documented defaults.
-    pub fn gpt_5_6_luna() -> Gpt5_6 {
-        Gpt5_6::new(Gpt5_6Tier::Luna)
+    pub fn gpt_5_6_luna() -> GptNoneToMax {
+        GptNoneToMax::new(GptNoneToMaxTier::Luna5_6)
     }
 
     /// GPT-5.5 with documented defaults.
@@ -777,15 +587,9 @@ impl From<Gpt6LowToMax> for Model {
     }
 }
 
-impl From<Gpt6Sol> for Model {
-    fn from(m: Gpt6Sol) -> Self {
-        Model::Gpt6Sol(m)
-    }
-}
-
-impl From<Gpt5_6> for Model {
-    fn from(m: Gpt5_6) -> Self {
-        Model::Gpt5_6(m)
+impl From<GptNoneToMax> for Model {
+    fn from(m: GptNoneToMax) -> Self {
+        Model::GptNoneToMax(m)
     }
 }
 

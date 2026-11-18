@@ -18,8 +18,10 @@ compile error in a hand-rolled `serde_json::json!`:
 
 1. **Parameter combinations the API refuses.** `max` reasoning effort exists on
    GPT-5.6 and not on GPT-5.5. `prompt_cache_options.ttl` is GPT-5.6's field;
-   `prompt_cache_retention` is the earlier generation's. Sending the wrong one is
-   a 400.
+   `prompt_cache_retention` is the earlier generation's, and GPT-5.5 and GPT-5.4
+   answer `prompt_cache_options` with a 400 (measured 2026-11-18). The newer
+   models still accept `prompt_cache_retention`, which the reference deprecates
+   in favour of `ttl`; the crate sends exactly one of the two per model.
 2. **Requests that silently destroy the prompt cache.** These are worse, because
    there is no error at all — only a bigger bill. OpenAI hashes the rendered
    prefix: hidden OpenAI content, then `tools`, then developer instructions, then
@@ -201,16 +203,20 @@ URL.
 
 ## Modeled
 
-`gpt-6-astra`, `gpt-6.1-sol`, `gpt-6-sol`, `gpt-5.6-sol`, `gpt-5.6-terra`, `gpt-5.6-luna`, `gpt-5.5`,
-`gpt-5.5-pro`, `gpt-5.4`. Each carries its maximum input and output sizes,
+`gpt-6-astra`, `gpt-6.1-sol`, `gpt-6.1-terra`, `gpt-6-sol`, `gpt-6-luna`, `gpt-5.6-sol`,
+`gpt-5.6-terra`, `gpt-5.6-luna`, `gpt-5.5`, `gpt-5.5-pro`, `gpt-5.4`. Each carries its maximum input and output sizes,
 context window, knowledge cutoff, minimum cacheable prefix, and exact base
 per-token pricing including cache reads and writes. `Pricing` documents the
 long-context and service-tier adjustments its exact arithmetic excludes.
 
-GPT-6 Sol accepts `EffortNoneToMax` and documents `medium` as its default;
-`Model::gpt_6_sol()` leaves the effort unset until the caller chooses one.
-GPT-6 Astra and GPT-6.1 Sol share one type, `Gpt6LowToMax`, whose
-`EffortLowToMax` has no `none`, so `none` does not compile. Function
+From GPT-5.6 on, the models take one parameter set (effort, `reasoning.mode`,
+`reasoning.context`, `prompt_cache_options`) and differ only in the efforts they
+accept, so there is one generic type, `ReasoningModel`, with two aliases. The
+`GptNoneToMax` alias covers GPT-5.6 Sol, Terra and Luna, GPT-6 Sol, GPT-6 Luna and
+GPT-6.1 Terra, each a tier of it, and documents `medium` as its default effort;
+`Model::gpt_6_sol()` leaves the effort unset until the caller chooses one. GPT-6
+Astra and GPT-6.1 Sol are the tiers of `Gpt6LowToMax`, whose `EffortLowToMax` has
+no `none`, so `none` does not compile. Function
 tools can state `async: true` without losing that flag when the returned call is
 decoded and replayed. The crate currently models append-only
 `configuration_update` items for Astra only. Request validation rejects other

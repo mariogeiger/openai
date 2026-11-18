@@ -198,12 +198,20 @@ api_enum! {
 
 api_enum! {
     /// `prompt_cache_options.ttl`, the minimum lifetime of every breakpoint the
-    /// request writes. GPT-5.6 and later accept exactly one value, so this
-    /// enum has exactly one variant — the type states the constraint instead of
-    /// inviting a string the API would refuse.
+    /// request writes. GPT-5.6 and later accept `30m` and `12h` and refuse every
+    /// other value, so the type has no spelling for the others. Measured
+    /// 2026-11-18: `1h` and `24h` answer *"Supported values are: '30m'"*, a
+    /// message that names only one of the two accepted values.
     CacheTtl {
         /// Thirty minutes after the latest write or reuse; also the default.
         ThirtyMinutes => "30m",
+        /// Twelve hours. The reference lists it beside `30m`, and GPT-5.6 Terra,
+        /// GPT-6 Sol, Astra and Luna and GPT-6.1 Sol and Terra each answered a
+        /// request carrying it (measured 2026-11-18). It is billed more: GPT-6.1
+        /// Terra's page prices a 12-hour cache write at $2.50 per million tokens
+        /// against $1.25 for 30 minutes, a rate [`Pricing`](crate::model::Pricing)
+        /// does not carry.
+        TwelveHours => "12h",
     }
 }
 

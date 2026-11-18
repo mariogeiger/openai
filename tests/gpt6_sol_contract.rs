@@ -3,7 +3,7 @@
 
 use openai::content::InputBlock;
 use openai::context::{BreakpointSlot, Context};
-use openai::model::{EffortNoneToMax, Gpt6SolCaching, Model, ModelId, YearMonth};
+use openai::model::{CacheOptions, EffortNoneToMax, Model, ModelId, YearMonth};
 use openai::prefix::PrefixSettings;
 use openai::request::Request;
 use openai::values::{CacheMode, ReasoningContext, ReasoningEffort, ReasoningMode};
@@ -86,7 +86,7 @@ fn cache_controls_modes_and_output_bounds_are_preserved() {
     assert_eq!(body["reasoning"]["mode"], "pro");
     assert_eq!(body["prompt_cache_options"], json!({"mode": "explicit", "ttl": "30m"}));
     assert!(body.get("prompt_cache_retention").is_none());
-    let model = model.with_caching(Gpt6SolCaching::default());
+    let model = model.with_caching(CacheOptions::default());
     assert_eq!(model.caching.mode, CacheMode::Implicit);
     assert!(Request::new(&context, PrefixSettings::new(model)).unwrap().with_max_output_tokens(128_001).is_err());
 }

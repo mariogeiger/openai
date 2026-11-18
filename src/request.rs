@@ -12,7 +12,7 @@
 //! explicit breakpoints at all — cannot be skipped.
 
 use crate::context::{CACHE_WRITE_SLOTS, Context};
-use crate::model::{Gpt5_6, Model};
+use crate::model::{CacheOptions, Model};
 use crate::prefix::PrefixSettings;
 use crate::tools::ToolChoice;
 use crate::values::{CacheMode, Include, Metadata, ServiceTier, Truncation};
@@ -61,23 +61,15 @@ pub struct CacheWriteBudget {
 impl CacheWriteBudget {
     /// The budget a model and its caching mode allow.
     pub fn of(model: &Model) -> Self {
-        match model {
-            Model::Gpt6Sol(m) => match m.caching.mode {
-                CacheMode::Implicit => Self { explicit_slots: CACHE_WRITE_SLOTS - 1, implicit_breakpoint: true },
-                CacheMode::Explicit => Self { explicit_slots: CACHE_WRITE_SLOTS, implicit_breakpoint: false },
-            },
-            Model::Gpt6LowToMax(m) => match m.caching.mode {
-                CacheMode::Implicit => Self { explicit_slots: CACHE_WRITE_SLOTS - 1, implicit_breakpoint: true },
-                CacheMode::Explicit => Self { explicit_slots: CACHE_WRITE_SLOTS, implicit_breakpoint: false },
-            },
-            Model::Gpt5_6(Gpt5_6 { caching, .. }) => match caching.mode {
-                CacheMode::Implicit => Self { explicit_slots: CACHE_WRITE_SLOTS - 1, implicit_breakpoint: true },
-                CacheMode::Explicit => Self { explicit_slots: CACHE_WRITE_SLOTS, implicit_breakpoint: false },
-            },
-            // Earlier generations place implicit breakpoints only.
-            Model::Gpt5_5(_) | Model::Gpt5_5Pro(_) | Model::Gpt5_4(_) => {
-                Self { explicit_slots: 0, implicit_breakpoint: true }
+        match model.cache_options() {
+            Some(CacheOptions { mode: CacheMode::Implicit, .. }) => {
+                Self { explicit_slots: CACHE_WRITE_SLOTS - 1, implicit_breakpoint: true }
             }
+            Some(CacheOptions { mode: CacheMode::Explicit, .. }) => {
+                Self { explicit_slots: CACHE_WRITE_SLOTS, implicit_breakpoint: false }
+            }
+            // Earlier generations place implicit breakpoints only.
+            None => Self { explicit_slots: 0, implicit_breakpoint: true },
         }
     }
 }

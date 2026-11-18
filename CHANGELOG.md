@@ -10,6 +10,66 @@ and the working instructions. 0.5.0 split it into `SOUL.md` and `AGENTS.md`; the
 older references are left as they were written, because a changelog records what
 was true at the time.
 
+## [0.13.0] - 2026-11-18
+
+### Added
+
+- GPT-6.1 Terra (`Model::gpt_6_1_terra()`, `ModelId::Gpt6_1Terra`) and GPT-6 Luna
+  (`Model::gpt_6_luna()`, `ModelId::Gpt6Luna`), with their documented limits,
+  knowledge cutoffs (June and May 2026), `medium` default effort and pricing.
+  Terra reads cached input at 5% of the input rate, Luna at 10%; both write the
+  cache at 1.25x. Both accept `none` through `max` and the same cache controls
+  as GPT-6 Sol. Measured live on 2026-11-18, each through this crate's own
+  bodies: all six efforts, a function-call round trip, and an explicit
+  breakpoint written then read back in full (6,595 tokens). Two captured streams
+  are in `tests/data`.
+- `CacheTtl::TwelveHours` (`12h`). The reference lists `prompt_cache_options.ttl`
+  as `30m` or `12h`; the type held only `30m` on the claim that the API accepted
+  one value. Every GPT-5.6-and-later model probed answered a `12h` request, and
+  `1h` and `24h` stay refused. A 12-hour write is priced higher than a 30-minute
+  one (GPT-6.1 Terra's page: $2.50 against $1.25 per million tokens), which
+  `Pricing` does not carry; its documentation says so.
+- `InputTokensDetails::cache_write_tokens_details`, the writes split into
+  `ttl_12h_tokens` and `ttl_30m_tokens` as the reference documents. A 12-hour
+  request answered with its writes under `ttl_12h_tokens`.
+
+### Changed
+
+- **Breaking.** GPT-5.6, GPT-6 Sol, GPT-6.1 Terra and GPT-6 Luna accept exactly
+  the same parameters, as do GPT-6 Astra and GPT-6.1 Sol, so the three structs
+  that repeated them (`Gpt5_6`, `Gpt6Sol`, `Gpt6LowToMax`) are one generic
+  `ReasoningModel<Tier, Effort>` with two aliases: `GptNoneToMax` and
+  `Gpt6LowToMax`. A model that arrives with a known range of efforts is a new
+  tier, not a new struct. `Gpt5_6Tier` is `GptNoneToMaxTier`, whose variants name
+  the model (`Sol5_6`, `Terra5_6`, `Luna5_6`, `Sol6`, `Terra6_1`, `Luna6`);
+  `Gpt5_6Caching`, `Gpt6SolCaching` and `Gpt6LowToMaxCaching` are one
+  `CacheOptions`; `Model::Gpt5_6` and `Model::Gpt6Sol` are `Model::GptNoneToMax`.
+  New: `Model::cache_options()`.
+
+  Migrating from 0.12: `Model::gpt_5_6_sol()`, `gpt_6_sol()` and the rest keep
+  their names and now return `GptNoneToMax`; `Gpt5_6::new(Gpt5_6Tier::Luna)` is
+  `GptNoneToMax::new(GptNoneToMaxTier::Luna5_6)`; `match` arms on `Model::Gpt5_6`
+  and `Model::Gpt6Sol` become one arm on `Model::GptNoneToMax`.
+- Documentation that the 2026-11-18 measurements outdated: `prompt_cache_retention`
+  is still accepted on GPT-5.6 and later (the reference now deprecates it in
+  favour of `ttl`), so "sending the wrong one is a 400" holds only the other way
+  round (`prompt_cache_options` on GPT-5.5 and GPT-5.4 answers 400). `reasoning.context`
+  is accepted by GPT-5.5 and GPT-5.4 too; it stays unmodeled there because
+  sending it would move their cached prefix.
+
+### Checked, unchanged
+
+- Every modeled model (Astra, GPT-6.1 Sol, GPT-6 Sol, the three GPT-5.6 tiers,
+  GPT-5.5, GPT-5.4; GPT-5.5 Pro is not served by the gateway used and was not
+  run) streamed and settled through this crate with every effort it types, tool
+  round trips completed on all of them, and the cache read back what it wrote.
+  Prices match the gateway's published figures. `none` on Astra and GPT-6.1 Sol
+  and `max` on GPT-5.5 and GPT-5.4 are still refused.
+- `configuration_update` stays validated for Astra alone. A body carrying one
+  was also answered with 200 by GPT-6.1 Sol, GPT-6.1 Terra, GPT-6 Luna, GPT-6 Sol
+  and GPT-5.6 Terra on 2026-11-18; whether they act on it was not shown, so the
+  restriction is kept.
+
 ## [0.12.0] - 2026-10-14
 
 ### Added

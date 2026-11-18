@@ -46,6 +46,27 @@ pub struct InputTokensDetails {
     /// earlier generations do not charge for writes at all.
     #[serde(default, deserialize_with = "counted")]
     pub cache_write_tokens: u32,
+    /// The same writes, split by the lifetime they were written with.
+    ///
+    /// Optional on the wire, so absent reads as no writes of either lifetime.
+    /// Where it is present the two counts sum to [`Self::cache_write_tokens`],
+    /// and it is the evidence that a request's `ttl` took effect: a 12-hour
+    /// request answers with its writes under `ttl_12h_tokens` (measured
+    /// 2026-11-18, GPT-6.1 Terra and GPT-6 Luna).
+    #[serde(default)]
+    pub cache_write_tokens_details: CacheWriteTokensDetails,
+}
+
+/// Cache writes split by the retention they were written with.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Deserialize)]
+pub struct CacheWriteTokensDetails {
+    /// Tokens written with 12-hour retention, which cost more than 30-minute
+    /// ones.
+    #[serde(default, deserialize_with = "counted")]
+    pub ttl_12h_tokens: u32,
+    /// Tokens written with 30-minute retention.
+    #[serde(default, deserialize_with = "counted")]
+    pub ttl_30m_tokens: u32,
 }
 
 /// The breakdown of output tokens.
@@ -197,6 +218,32 @@ mod tests {
         assert_eq!(usage.uncached_input_tokens(), 100);
     }
 
+    /// Measured 2026-11-18 on a 12-hour request: every written token is reported
+    /// under `ttl_12h_tokens`, and a response that predates the breakdown reads
+    /// as writes of neither lifetime.
+    #[test]
+    fn cache_writes_are_split_by_the_lifetime_they_were_written_with() {
+        let usage: Usage = serde_json::from_str(
+            r#"{
+                "input_tokens": 6569,
+                "input_tokens_details": {
+                    "cached_tokens": 0,
+                    "cache_write_tokens": 6566,
+                    "cache_write_tokens_details": {"ttl_12h_tokens": 6566, "ttl_30m_tokens": 0}
+                },
+                "output_tokens": 5,
+                "total_tokens": 6574
+            }"#,
+        )
+        .unwrap();
+        let split = usage.input_tokens_details.cache_write_tokens_details;
+        assert_eq!((split.ttl_12h_tokens, split.ttl_30m_tokens), (6_566, 0));
+        assert_eq!(split.ttl_12h_tokens + split.ttl_30m_tokens, usage.input_tokens_details.cache_write_tokens);
+
+        let older = documented_usage();
+        assert_eq!(older.input_tokens_details.cache_write_tokens_details, CacheWriteTokensDetails::default());
+    }
+
     #[test]
     fn the_hit_rate_is_undefined_without_input() {
         let usage = documented_usage();
@@ -204,7 +251,7 @@ mod tests {
 
         let empty = Usage {
             input_tokens: 0,
-            input_tokens_details: InputTokensDetails { cached_tokens: 0, cache_write_tokens: 0 },
+            input_tokens_details: InputTokensDetails { cached_tokens: 0, cache_write_tokens: 0, ..Default::default() },
             output_tokens: 0,
             output_tokens_details: OutputTokensDetails { reasoning_tokens: 0 },
             total_tokens: 0,
@@ -228,7 +275,11 @@ mod tests {
         let prefix = 10_000u32;
         let usage = |cached, written| Usage {
             input_tokens: prefix,
-            input_tokens_details: InputTokensDetails { cached_tokens: cached, cache_write_tokens: written },
+            input_tokens_details: InputTokensDetails {
+                cached_tokens: cached,
+                cache_write_tokens: written,
+                ..Default::default()
+            },
             output_tokens: 0,
             output_tokens_details: OutputTokensDetails { reasoning_tokens: 0 },
             total_tokens: prefix,
@@ -251,13 +302,19 @@ mod tests {
         let pricing = ModelId::Gpt5_5Pro.pricing();
         let cached = Usage {
             input_tokens: 1_000,
-            input_tokens_details: InputTokensDetails { cached_tokens: 1_000, cache_write_tokens: 0 },
+            input_tokens_details: InputTokensDetails {
+                cached_tokens: 1_000,
+                cache_write_tokens: 0,
+                ..Default::default()
+            },
             output_tokens: 0,
             output_tokens_details: OutputTokensDetails { reasoning_tokens: 0 },
             total_tokens: 1_000,
         };
-        let uncached =
-            Usage { input_tokens_details: InputTokensDetails { cached_tokens: 0, cache_write_tokens: 0 }, ..cached };
+        let uncached = Usage {
+            input_tokens_details: InputTokensDetails { cached_tokens: 0, cache_write_tokens: 0, ..Default::default() },
+            ..cached
+        };
         assert_eq!(cached.cost_nanodollars(pricing), uncached.cost_nanodollars(pricing));
     }
 
@@ -267,7 +324,11 @@ mod tests {
     fn inconsistent_counts_saturate_rather_than_wrap() {
         let usage = Usage {
             input_tokens: 10,
-            input_tokens_details: InputTokensDetails { cached_tokens: 50, cache_write_tokens: 50 },
+            input_tokens_details: InputTokensDetails {
+                cached_tokens: 50,
+                cache_write_tokens: 50,
+                ..Default::default()
+            },
             output_tokens: 0,
             output_tokens_details: OutputTokensDetails { reasoning_tokens: 0 },
             total_tokens: 10,

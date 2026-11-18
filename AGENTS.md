@@ -18,6 +18,7 @@
 | `src/lib.rs` | the crate's own documentation, the endpoint constants, module list |
 | `src/values.rs` | closed API vocabularies, via `api_enum!` — one wire literal, stated once |
 | `src/model.rs` | per-model types: accepted parameter sets, effort ranges, limits, pricing |
+| `src/model/reasoning_model.rs` | the one generic parameter set of GPT-5.6 and later, and the tiers that name its models |
 | `src/content.rs` | input items and content blocks, and the role/vocabulary pairing |
 | `src/context.rs` | append-only conversation state, the frozen tool array, breakpoint slots |
 | `src/prefix.rs` | per-call settings that are *inside* the hashed prefix |
@@ -132,6 +133,15 @@ left to be rediscovered. Priority is by what a real consumer needs.
 7. **`scoped_content` and `input_audio`.** Both are in the documented input
    vocabulary and neither is modeled. Confirm live what each accepts first: the
    reference does not describe `scoped_content` at all.
+
+8. **Cache details the reference lists and the crate leaves out.** A per-breakpoint
+   `ttl` (the breakpoint inherits the request's today), `prompt_cache_options`'s
+   `comparison_response_id` and `prewarm`, and the price of a 12-hour cache write,
+   which `Pricing` cannot carry yet. Also `reasoning.context` on GPT-5.5 and
+   GPT-5.4, which they accept (measured 2026-11-18) and which would move their
+   cached prefix, and `configuration_update` beyond Astra: GPT-6.1 Sol, GPT-6.1
+   Terra, GPT-6 Luna, GPT-6 Sol and GPT-5.6 Terra answered a body carrying one
+   with 200 that day, but whether they act on it is not shown.
 
 ## Deliberately out of scope
 

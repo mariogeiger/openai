@@ -12,7 +12,7 @@
 use openai::content::InputBlock;
 use openai::context::{BreakpointSlot, CACHE_WRITE_SLOTS, Context};
 use openai::model::{
-    EffortLowToMax, EffortMediumToXhigh, EffortNoneToMax, EffortNoneToXhigh, Gpt5_6, Gpt5_6Tier, Model,
+    EffortLowToMax, EffortMediumToXhigh, EffortNoneToMax, EffortNoneToXhigh, GptNoneToMax, GptNoneToMaxTier, Model,
 };
 use openai::prefix::{PrefixSettings, TextFormat};
 use openai::request::{CacheWriteBudget, Request, RequestError, UncacheableInstructions};
@@ -489,7 +489,7 @@ fn every_tier_reaches_the_wire_with_its_own_id() {
     ] {
         assert_eq!(body(&context, PrefixSettings::new(model))["model"], id);
     }
-    assert_eq!(Gpt5_6::new(Gpt5_6Tier::Luna).tier, Gpt5_6Tier::Luna);
+    assert_eq!(GptNoneToMax::new(GptNoneToMaxTier::Luna5_6).tier, GptNoneToMaxTier::Luna5_6);
 }
 
 /// `stream_options` reaches the wire only alongside `stream: true`, because
